@@ -27,7 +27,6 @@ class User(models.Model):
 
     credit = models.IntegerField(default=0)
 
-    # 🔥 FIXED (INSIDE MODEL)
     status = models.CharField(
         max_length=10,
         default="Active"
@@ -52,32 +51,24 @@ class CreditLog(models.Model):
     old_credit = models.IntegerField()
     new_credit = models.IntegerField()
     notes = models.TextField(blank=True)
+    results = models.JSONField(default=list)  
     created_at = models.DateTimeField(auto_now_add=True)
 
 
-class CreditLog(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    service = models.CharField(max_length=50)
-    credit = models.IntegerField()
-    type = models.CharField(max_length=20)
-    old_credit = models.IntegerField()
-    new_credit = models.IntegerField()
-    notes = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    
 class Campaign(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     message = models.TextField()
     total = models.IntegerField()
-    success = models.IntegerField()
-    failed = models.IntegerField()
+    success = models.IntegerField(default=0)
+    failed = models.IntegerField(default=0)
 
-    # 🔥 NEW
     nonwa = models.IntegerField(default=0)
     rejected = models.IntegerField(default=0)
 
-    media = models.JSONField(default=list)   # 🔥 store files
-    results = models.JSONField(default=list) # 🔥 store full data
+    media = models.JSONField(default=list)
+    results = models.JSONField(default=list)
+
+    # 🔥 NEW — "pending" or "completed"
+    status = models.CharField(max_length=20, default="completed")
 
     created_at = models.DateTimeField(auto_now_add=True)

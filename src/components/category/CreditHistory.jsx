@@ -60,7 +60,7 @@ useEffect(() => {
       {/* TOP NOTE */}
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[16px]">
-          NOTE = All campaigns will be delivered Between 8A.M to 6P.M - (Monday to Saturday) on working days.
+          NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday) on working days.
         </marquee>
       </div>
 
@@ -186,10 +186,10 @@ useEffect(() => {
               <span>Showing {filteredData.length} entries</span>
 
               <div className="flex gap-2">
-                <button className="border px-3 py-1 hover:bg-gray-200">
+                <button className="border px-3 py-1 hover:bg-gray-200 rounded-b-md">
                   Previous
                 </button>
-                <button className="border px-3 py-1 hover:bg-gray-200">
+                <button className="border px-3 py-1 hover:bg-gray-200 rounded-b-md">
                   Next
                 </button>
               </div>

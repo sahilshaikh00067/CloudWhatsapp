@@ -77,7 +77,7 @@ const CreditManage = () => {
             {/* NOTE */}
             <div className="bg-gray-200">
                 <marquee className="text-red-600 py-2 text-[18px]">
-                    NOTE = All campaigns will be delivered Between 8A.M to 6P.M - (Monday to Saturday)
+                    NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday)
                 </marquee>
             </div>
 
@@ -90,7 +90,7 @@ const CreditManage = () => {
 
                     <div className="flex gap-4 items-center">
 
-                        <div className="relative w-[200px]">
+                        <div className="relative w-[300px]">
 
                             {/* INPUT */}
                             <input
@@ -133,7 +133,7 @@ const CreditManage = () => {
                         <select
                             value={service}
                             onChange={(e) => setService(e.target.value)}
-                            className="input w-[180px]"
+                            className="input w-[220px]"
                         >
                             <option>WHATSAPP</option>
                             <option>DP WHATSAPP</option>
@@ -144,14 +144,14 @@ const CreditManage = () => {
                             placeholder="0"
                             value={credit}
                             onChange={(e) => setCredit(e.target.value)}
-                            className="input w-[150px]"
+                            className="input w-[190px]"
                         />
 
                         <input
                             placeholder="Notes"
                             value={notes}
                             onChange={(e) => setNotes(e.target.value)}
-                            className="input w-[200px]"
+                            className="input w-[250px]"
                         />
 
                         <button onClick={handleSubmit} className="btn">
@@ -184,7 +184,7 @@ const CreditManage = () => {
 
                             <thead className="bg-[#2FA4C7] text-white">
                                 <tr>
-                                    <th className="p-3 border-r border-gray-300">ID</th>
+                                    <th className="p-3 border-r border-gray-200">ID</th>
                                     <th className="border-r border-gray-300">Username</th>
                                     <th className="border-r border-gray-300">Service</th>
                                     <th className="border-r border-gray-300">Credit</th>
@@ -201,7 +201,7 @@ const CreditManage = () => {
                                     </tr>
                                 ) : (
                                     users.map((u, index) => (
-                                        <tr key={u.id} className="bg-gray-200 border-t border-gray-300">
+                                        <tr key={u.id} className="bg-gray-100 border-t border-gray-300">
 
                                             <td className="p-3 border-r border-gray-300">{index + 1}</td>
                                             <td className="border-r border-gray-300">{u.username}</td>

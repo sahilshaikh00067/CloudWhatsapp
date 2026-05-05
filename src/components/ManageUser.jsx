@@ -184,7 +184,7 @@ const handleEditSave = async () => {
       {/* TOP NOTE */}
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[16px]">
-          NOTE = All campaigns will be delivered Between 8A.M to 6P.M - (Monday to Saturday)
+          NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday)
         </marquee>
       </div>
 
@@ -269,7 +269,7 @@ const handleEditSave = async () => {
                   </tr>
                 ) : (
                   filteredUsers.map((u, index) => (
-                    <tr key={u.id} className="border-t bg-gray-200">
+                    <tr key={u.id} className="border-t bg-gray-100">
 
                       <td className="p-3 border-r border-gray-300">{index + 1}</td>
                       <td className="border-r border-gray-300">{u.name || "-"}</td>

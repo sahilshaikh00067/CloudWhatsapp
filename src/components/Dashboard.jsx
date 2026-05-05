@@ -150,7 +150,7 @@ const res = await fetch(`http://127.0.0.1:8000/api/get-campaigns/?user_id=${user
 
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[16px]">
-          NOTE = All campaigns will be delivered Between 8A.M to 6P.M - (Monday to Saturday)
+          NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday)
         </marquee>
       </div>
 
@@ -159,13 +159,13 @@ const res = await fetch(`http://127.0.0.1:8000/api/get-campaigns/?user_id=${user
         {/* LEFT */}
         <div className="card relative">
 
-          <div className="flex justify-between">
+          <div className="flex justify-between ">
 
-            <button onClick={() => setShowFilter(!showFilter)} className="calc-btn">
+            <button onClick={() => setShowFilter(!showFilter)} className="calc-btn rounded-b-md">
               📊 Calculator
             </button>
 
-            <button className="date-btn">{selectedFilter}</button>
+            <button className="date-btn rounded-b-md">{selectedFilter}</button>
 
           </div>
 
