@@ -501,9 +501,8 @@ async function restoreSessions() {
 // ===============================
 // SERVER START
 // ===============================
-app.listen(5000, async () => {
-  console.log("🚀 Server on http://localhost:5000");
-  console.log("📋 Working hours: 9AM - 6PM");
-  await restoreSessions(); // 🔥 Auto-restore all sessions
-});
+const PORT = process.env.PORT || 5000;
 
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on ${PORT}`);
+});
