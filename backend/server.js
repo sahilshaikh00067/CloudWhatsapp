@@ -272,7 +272,7 @@ async function processQueue() {
 
         const updatedResults = results.map((r) => ({ ...r, files: filesData }));
 
-        await fetch("http://127.0.0.1:8000/api/send-whatsapp/", {
+        await fetch("https://cloudwhatsapp-1.onrender.com/api/send-whatsapp/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

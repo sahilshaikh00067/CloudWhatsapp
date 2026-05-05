@@ -190,7 +190,7 @@ export default function WappCampaign() {
       if (video) formData.append("files", video);
       if (pdf) formData.append("files", pdf);
 
-      const res = await fetch("http://localhost:5000/send-bulk", {
+      const res = await fetch("https://cloudwhatsapp.onrender.com/send-bulk", {
         method: "POST",
         body: formData,
       });
