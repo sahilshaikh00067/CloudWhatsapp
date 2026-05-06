@@ -76,7 +76,7 @@ const Dashboard = () => {
   const loadReports = async () => {
 const userId = sessionStorage.getItem("user_id");
 
-const res = await fetch(`http://127.0.0.1:8000/api/get-campaigns/?user_id=${userId}`);
+const res = await fetch(`https://whatsappsms-olho.onrender.com/api/get-campaigns/?user_id=${userId}`);
   const data = await res.json();
 
   const now = new Date();
@@ -100,7 +100,7 @@ useEffect(() => {
     try {
 const userId = sessionStorage.getItem("user_id");
 
-const res = await fetch(`http://127.0.0.1:8000/api/get-campaigns/?user_id=${userId}`);
+const res = await fetch(`https://whatsappsms-olho.onrender.com/api/get-campaigns/?user_id=${userId}`);
       const reports = await res.json();
 
       const now = new Date();

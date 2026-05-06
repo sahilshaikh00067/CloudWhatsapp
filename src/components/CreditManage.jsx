@@ -18,7 +18,7 @@ const CreditManage = () => {
     const loadUsers = async () => {
         try {
             const res = await fetch(
-                `http://127.0.0.1:8000/api/get-users/?user_id=${loggedUser?.id}`
+                `https://whatsappsms-olho.onrender.com/api/get-users/?user_id=${loggedUser?.id}`
             );
             const data = await res.json();
             setUsers(Array.isArray(data) ? data : []);
@@ -40,7 +40,7 @@ const CreditManage = () => {
         const user = users.find((u) => u.id == selectedUser);
 
         try {
-            const res = await fetch("http://127.0.0.1:8000/api/update-user/", {
+            const res = await fetch("https://whatsappsms-olho.onrender.com/api/update-user/", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

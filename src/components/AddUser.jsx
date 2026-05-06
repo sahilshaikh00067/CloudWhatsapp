@@ -23,7 +23,7 @@ const AddUser = () => {
     e.preventDefault();
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/create-user/", {
+      const res = await fetch("https://whatsappsms-olho.onrender.com/api/create-user/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -47,7 +47,7 @@ export default function Header() {
 
       try {
         const res = await fetch(
-          `http://127.0.0.1:8000/api/get-user/?user_id=${stored.id}`
+          `https://whatsappsms-olho.onrender.com/api/get-user/?user_id=${stored.id}`
         );
         const data = await res.json();
 
