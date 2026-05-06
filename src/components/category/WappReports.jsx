@@ -347,7 +347,7 @@ const WappReports = () => {
                                         .map((img, idx) => (
                                           <img
                                             key={idx}
-                                            src={`http://206.81.10.143:5000/uploads/${img.name}`}
+                                            src={`https://wa.cloudwhatsapp.in/uploads/${img.name}`}
                                             className="w-20 h-20 object-cover border"
                                             alt="img"
                                           />
@@ -360,7 +360,7 @@ const WappReports = () => {
                                         .filter((f) => f?.type?.includes("video"))
                                         .map((vid, idx) => (
                                           <video key={idx} controls className="w-32">
-                                            <source src={`http://206.81.10.143:5000/uploads/${vid.name}`} />
+                                            <source src={`https://wa.cloudwhatsapp.in/uploads/${vid.name}`} />
                                           </video>
                                         ))}
                                     </div>
@@ -372,7 +372,7 @@ const WappReports = () => {
                                         .map((pdf, idx) => (
                                           <a
                                             key={idx}
-                                            href={`http://206.81.10.143:5000/uploads/${pdf.name}`}
+                                            href={`https://wa.cloudwhatsapp.in/uploads/${pdf.name}`}
                                             target="_blank"
                                             rel="noreferrer"
                                             className="bg-white border px-2 py-1"

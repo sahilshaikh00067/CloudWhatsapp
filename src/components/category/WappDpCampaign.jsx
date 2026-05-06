@@ -193,7 +193,7 @@ export default function WappDpCampaign() {
       if (video) formData.append("files", video);
       if (pdf) formData.append("files", pdf);
 
-      const res = await fetch("http://206.81.10.143:5000/send-bulk", {
+      const res = await fetch("https://wa.cloudwhatsapp.in/send-bulk", {
         method: "POST",
         body: formData,
       });
