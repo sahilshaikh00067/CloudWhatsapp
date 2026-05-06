@@ -146,7 +146,7 @@ export default function WappDpCampaign() {
       let campaignId = null;
 
       if (isLarge) {
-        const pendingSave = await fetch("http://127.0.0.1:8000/api/send-whatsapp/", {
+        const pendingSave = await fetch("https://whatsappsms-olho.onrender.com/api/send-whatsapp/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -193,7 +193,7 @@ export default function WappDpCampaign() {
       if (video) formData.append("files", video);
       if (pdf) formData.append("files", pdf);
 
-      const res = await fetch("https://cloudwhatsapp.onrender.com/send-bulk", {
+      const res = await fetch("http://206.81.10.143:5000/send-bulk", {
         method: "POST",
         body: formData,
       });
@@ -244,7 +244,7 @@ export default function WappDpCampaign() {
         files: filesData,
       }));
 
-      const saveRes = await fetch("http://127.0.0.1:8000/api/send-whatsapp/", {
+      const saveRes = await fetch("https://whatsappsms-olho.onrender.com/api/send-whatsapp/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

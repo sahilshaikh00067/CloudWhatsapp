@@ -32,7 +32,7 @@ const WappReports = () => {
       const userId = user?.id || sessionStorage.getItem("user_id");
 
       const res = await fetch(
-        `http://127.0.0.1:8000/api/get-campaigns/?user_id=${userId}`
+        `https://whatsappsms-olho.onrender.com/api/get-campaigns/?user_id=${userId}`
       );
       const data = await res.json();
 
@@ -347,7 +347,7 @@ const WappReports = () => {
                                         .map((img, idx) => (
                                           <img
                                             key={idx}
-                                            src={`https://cloudwhatsapp.onrender.com/uploads/${img.name}`}
+                                            src={`http://206.81.10.143:5000/uploads/${img.name}`}
                                             className="w-20 h-20 object-cover border"
                                             alt="img"
                                           />
@@ -360,7 +360,7 @@ const WappReports = () => {
                                         .filter((f) => f?.type?.includes("video"))
                                         .map((vid, idx) => (
                                           <video key={idx} controls className="w-32">
-                                            <source src={`https://cloudwhatsapp.onrender.com/uploads/${vid.name}`} />
+                                            <source src={`http://206.81.10.143:5000/uploads/${vid.name}`} />
                                           </video>
                                         ))}
                                     </div>
@@ -372,7 +372,7 @@ const WappReports = () => {
                                         .map((pdf, idx) => (
                                           <a
                                             key={idx}
-                                            href={`https://cloudwhatsapp.onrender.com/uploads/${pdf.name}`}
+                                            href={`http://206.81.10.143:5000/uploads/${pdf.name}`}
                                             target="_blank"
                                             rel="noreferrer"
                                             className="bg-white border px-2 py-1"
