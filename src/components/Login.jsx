@@ -1,11 +1,18 @@
 import { Formik } from "formik";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import * as Yup from "yup";
 import { useNavigate } from "react-router-dom";
+
+const API_URL = "https://whatsappsms-olho.onrender.com/api/login/";
 
 function Login() {
   const navigate = useNavigate();
   const [message, setMessage] = useState("");
+
+  // 🔥 Warm up the server as soon as Login page loads
+  useEffect(() => {
+    fetch(API_URL, { method: "OPTIONS" }).catch(() => {});
+  }, []);
 
   const validationSchema = Yup.object({
     username: Yup.string()
@@ -18,7 +25,6 @@ function Login() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-200">
-
       <div className="bg-white shadow rounded flex overflow-hidden w-[1000px]">
 
         {/* LEFT IMAGE */}
@@ -28,7 +34,6 @@ function Login() {
 
         {/* RIGHT FORM */}
         <div className="w-[50%] p-10">
-
           <h2 className="text-4xl font-medium mb-3">Login</h2>
           <p className="text-gray-500 mb-8 text-lg">
             Just sign in if you have an account.
@@ -37,70 +42,56 @@ function Login() {
           <Formik
             initialValues={{ username: "", password: "" }}
             validationSchema={validationSchema}
-
             onSubmit={async (values, { setSubmitting }) => {
+              setMessage("Logging in...");
 
               try {
-                const res = await fetch("https://whatsappsms-olho.onrender.com/api/login/", {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+                const res = await fetch(API_URL, {
                   method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                  },
+                  headers: { "Content-Type": "application/json" },
                   body: JSON.stringify(values),
+                  signal: controller.signal,
                 });
 
+                clearTimeout(timeout);
                 const data = await res.json();
 
-                console.log("LOGIN RESPONSE:", data);
-
                 if (data.status === "success") {
-
-                  // 🔥 CLEAR OLD
                   sessionStorage.clear();
-
-                  // 🔥 SAVE CORRECT USER
                   sessionStorage.setItem("user_id", data.user_id);
-
                   sessionStorage.setItem("user", JSON.stringify({
                     id: data.user_id,
                     username: values.username,
                     role: data.role,
-                    credit: data.credit
+                    credit: data.credit,
                   }));
-
                   sessionStorage.setItem("role", data.role);
 
-                  console.log("SAVED USER_ID:", data.user_id);
-
                   setMessage("Login successful ✅");
-
-                  setTimeout(() => {
-                    navigate("/dashboard");
-                  }, 500);
-
+                  navigate("/dashboard"); // ⚡ No delay, instant redirect
                 } else {
                   setMessage("Invalid username or password ❌");
                 }
-
               } catch (err) {
-                console.log(err);
-                setMessage("Server error ❌");
+                if (err.name === "AbortError") {
+                  setMessage("Request timed out. Please try again ❌");
+                } else {
+                  setMessage("Server error ❌");
+                }
               }
 
               setSubmitting(false);
             }}
           >
             {({
-              values,
-              errors,
-              touched,
-              handleChange,
-              handleBlur,
-              handleSubmit,
-              isSubmitting,
+              values, errors, touched,
+              handleChange, handleBlur,
+              handleSubmit, isSubmitting,
             }) => (
               <form onSubmit={handleSubmit}>
-
                 <input
                   name="username"
                   placeholder="Username"
@@ -133,9 +124,8 @@ function Login() {
                   disabled={isSubmitting}
                   className="btn w-full mt-4 text-xl py-3"
                 >
-                  Login
+                  {isSubmitting ? "Logging in..." : "Login"}
                 </button>
-
               </form>
             )}
           </Formik>
@@ -143,7 +133,6 @@ function Login() {
 
       </div>
 
-      {/* SAME CSS */}
       <style>{`
         .input {
           width: 100%;
@@ -172,7 +161,6 @@ function Login() {
           font-size: 12px;
         }
       `}</style>
-
     </div>
   );
 }

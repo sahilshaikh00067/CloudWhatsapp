@@ -447,7 +447,7 @@ export default function WappCampaign() {
               </p>
             ) : (
               <p className="text-sm text-green-600 bg-green-50 rounded-lg px-3 py-2 mb-4">
-                ✅ {numberList.length} numbers — will be sent <strong>instantly</strong>
+                ✅ {numberList.length}<strong></strong>
               </p>
             )}
 
