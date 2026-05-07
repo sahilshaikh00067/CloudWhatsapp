@@ -326,8 +326,9 @@ export default function WappCampaign() {
         `Total:    ${data.total}\nSent:     ${success}\nFailed:   ${failed}\nNon-WA:  ${nonwa}`
       );
 
-      resetForm();
+resetForm();
 
+window.dispatchEvent(new Event("campaignUpdated"));
     } catch (err) {
       console.log("ERROR:", err);
       showModal("error", "Unexpected Error ❌", "Something went wrong. Please try again.");

@@ -98,17 +98,21 @@ useEffect(() => {
 
   const loadData = async () => {
     try {
-const userId = sessionStorage.getItem("user_id");
 
-const res = await fetch(`https://whatsappsms-olho.onrender.com/api/get-campaigns/?user_id=${userId}`);
+      const userId = sessionStorage.getItem("user_id");
+
+      const res = await fetch(
+        `https://whatsappsms-olho.onrender.com/api/get-campaigns/?user_id=${userId}`
+      );
+
       const reports = await res.json();
 
       const now = new Date();
 
       const filtered = reports.filter(r => {
+
         const d = new Date(r.created_at);
 
-        // 🔥 TIME FIX (IMPORTANT)
         d.setMinutes(d.getMinutes() + d.getTimezoneOffset());
 
         if (selectedFilter === "Today") {
@@ -116,6 +120,7 @@ const res = await fetch(`https://whatsappsms-olho.onrender.com/api/get-campaigns
         }
 
         return true;
+
       });
 
       let total = 0;
@@ -142,8 +147,18 @@ const res = await fetch(`https://whatsappsms-olho.onrender.com/api/get-campaigns
 
   loadData();
 
-}, [selectedFilter]);
+  const handleRealtimeUpdate = () => {
+    console.log("⚡ Dashboard realtime refresh");
+    loadData();
+  };
 
+  window.addEventListener("campaignUpdated", handleRealtimeUpdate);
+
+  return () => {
+    window.removeEventListener("campaignUpdated", handleRealtimeUpdate);
+  };
+
+}, [selectedFilter]);
 
   return (
     <div className="min-h-screen bg-[#f1f1f1]">

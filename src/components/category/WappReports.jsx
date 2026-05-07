@@ -89,9 +89,22 @@ const WappReports = () => {
     }
   };
 
-  useEffect(() => {
+useEffect(() => {
+
+  loadReports();
+
+  const handleRealtimeUpdate = () => {
+    console.log("⚡ Instant report refresh");
     loadReports();
-  }, [selectedFilter]);
+  };
+
+  window.addEventListener("campaignUpdated", handleRealtimeUpdate);
+
+  return () => {
+    window.removeEventListener("campaignUpdated", handleRealtimeUpdate);
+  };
+
+}, [selectedFilter]);
 
   // ===============================
   // 🔥 AUTO-POLL — agar koi campaign pending hai to refresh karo
@@ -104,7 +117,7 @@ const WappReports = () => {
       pollRef.current = setInterval(() => {
         console.log("🔄 Polling: checking pending campaigns...");
         loadReports();
-      }, 30000);
+      }, 5000);
     } else {
       if (pollRef.current) {
         clearInterval(pollRef.current);
@@ -121,23 +134,46 @@ const WappReports = () => {
     setOpenRow(openRow === index ? null : index);
   };
 
-  const handleDownload = (data) => {
-    const rows = (data.results || []).map((r) => [
-      `'${r.number || ""}`,
-      r.status || "unknown",
-    ]);
+const handleDownload = (data) => {
 
-    const headers = ["Number", "Status"];
-    const csvContent =
-      headers.join(",") + "\n" + rows.map((r) => r.join(",")).join("\n");
+  const rows = (data.results || []).map((r, index) => ({
+    "Sr No": index + 1,
+    "Number": r.number || "",
+    "Status": (r.status || "unknown").toUpperCase(),
+  }));
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${data.name}-report.csv`;
-    a.click();
-  };
+  const headers = ["Sr No", "Number", "Status"];
+
+  const csvContent = [
+    headers.join(","),
+    ...rows.map((r) =>
+      [
+        r["Sr No"],
+        `"${r["Number"]}"`,
+        `"${r["Status"]}"`
+      ].join(",")
+    )
+  ].join("\n");
+
+  const blob = new Blob(
+    [csvContent],
+    { type: "text/csv;charset=utf-8;" }
+  );
+
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+
+  a.href = url;
+
+  a.download = `${data.name}-report.csv`;
+
+  document.body.appendChild(a);
+
+  a.click();
+
+  document.body.removeChild(a);
+};
 
   // ===============================
   // PAGINATION

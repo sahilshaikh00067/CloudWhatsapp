@@ -8,7 +8,8 @@ const path = require("path");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 app.use("/uploads", express.static("uploads"));
 
 // ===============================
@@ -18,6 +19,7 @@ const clients = {};
 const qrCodes = {};
 const readyMap = {};
 const infoMap = {};
+const retryCountMap = {};
 
 // ===============================
 // QUEUE SYSTEM
@@ -33,15 +35,15 @@ if (!fs.existsSync("sessions")) fs.mkdirSync("sessions");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) => cb(null, Date.now() + "_" + file.originalname), // 🔥 Unique names, no overwrite
+  filename: (req, file, cb) => cb(null, Date.now() + "_" + file.originalname),
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 🔥 50MB max per file
+  limits: { fileSize: 64 * 1024 * 1024 }, // 64MB max
 });
 
 // ===============================
-// HELPER: IS WITHIN WORKING HOURS
+// HELPERS
 // ===============================
 function isWorkingHours() {
   const now = new Date();
@@ -53,8 +55,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function jitter(base, variance) {
+  return base + Math.random() * variance;
+}
+
+function normalizeNumber(number) {
+  let num = number.trim().replace(/\D/g, "");
+  if (!num.startsWith("91")) num = "91" + num;
+  return num + "@c.us";
+}
+
 // ===============================
-// 🔥 FILE → BASE64 CACHE (avoid re-reading same file)
+// 🔥 FILE BASE64 CACHE
 // ===============================
 const fileCache = new Map();
 
@@ -65,12 +77,56 @@ async function getFileBase64(filePath) {
   return data;
 }
 
+function clearOldUploads() {
+  try {
+    const now = Date.now();
+    const uploadsDir = "./uploads";
+    fs.readdirSync(uploadsDir).forEach((file) => {
+      const filePath = path.join(uploadsDir, file);
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs > 6 * 60 * 60 * 1000) {
+        // older than 6 hours
+        fs.unlinkSync(filePath);
+      }
+    });
+  } catch {}
+}
+setInterval(clearOldUploads, 60 * 60 * 1000); // every hour
+
 // ===============================
-// 🔥 CREATE DEVICE — PERSISTENT + FAST
+// MIME TYPE HELPERS
 // ===============================
+function isPDF(mime) {
+  return mime === "application/pdf";
+}
+
+function isDocument(mime) {
+  return [
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/plain",
+    "application/zip",
+  ].includes(mime);
+}
+
+// ===============================
+// 🔥 CREATE DEVICE — FAST + STABLE
+// ===============================
+const MAX_RETRIES = 5;
+
 async function createDevice(deviceId) {
   if (clients[deviceId]) {
-    console.log("Already running:", deviceId);
+    console.log("⚠️ Already running:", deviceId);
+    return;
+  }
+
+  retryCountMap[deviceId] = retryCountMap[deviceId] || 0;
+
+  if (retryCountMap[deviceId] >= MAX_RETRIES) {
+    console.log(`❌ Max retries hit for ${deviceId}. Giving up.`);
+    retryCountMap[deviceId] = 0;
     return;
   }
 
@@ -95,15 +151,19 @@ async function createDevice(deviceId) {
         "--disable-infobars",
         "--window-size=800,600",
         "--single-process",
-        "--disable-renderer-backgrounding",
-        "--no-zygote",                        // 🔥 Faster startup
-        "--disable-accelerated-2d-canvas",    // 🔥 Less CPU
-        "--disable-web-security",             // 🔥 Faster load
+        "--no-zygote",
+        "--disable-accelerated-2d-canvas",
+        "--disable-web-security",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-blink-features=AutomationControlled",
+        "--memory-pressure-off",
+        "--js-flags=--max-old-space-size=256",
       ],
-      timeout: 90000,
+      timeout: 120000,
+      protocolTimeout: 120000,
     },
     takeoverOnConflict: true,
-    takeoverTimeoutMs: 0,
+    takeoverTimeoutMs: 5000,
     restartOnAuthFail: true,
   });
 
@@ -114,27 +174,30 @@ async function createDevice(deviceId) {
     try {
       qrCodes[deviceId] = await qrcode.toDataURL(qr, {
         errorCorrectionLevel: "L",
-        scale: 5,
-        margin: 1,
+        scale: 6,
+        margin: 2,
       });
       readyMap[deviceId] = false;
       console.log("📱 QR ready:", deviceId);
     } catch (e) {
-      console.log("QR error:", e);
+      console.log("QR error:", e.message);
     }
   });
 
   client.on("authenticated", () => {
     console.log("🔐 Authenticated:", deviceId);
     qrCodes[deviceId] = "";
+    retryCountMap[deviceId] = 0;
   });
 
-  client.on("ready", () => {
+  client.on("ready", async () => {
     readyMap[deviceId] = true;
+    retryCountMap[deviceId] = 0;
     const info = client.info;
     infoMap[deviceId] = {
       wid: info?.wid,
       pushname: info?.pushname,
+      connectedAt: new Date().toISOString(),
     };
     console.log("✅ Ready:", deviceId, "→", info?.wid?.user);
   });
@@ -145,23 +208,28 @@ async function createDevice(deviceId) {
   });
 
   client.on("disconnected", async (reason) => {
-    console.log("⚠️ Disconnected:", deviceId, "reason:", reason);
+    console.log("⚠️ Disconnected:", deviceId, "Reason:", reason);
     readyMap[deviceId] = false;
 
     if (reason === "LOGOUT") {
-      console.log("📵 Manual logout:", deviceId, "— no reconnect");
+      console.log("📵 Logged out:", deviceId);
       delete clients[deviceId];
       delete infoMap[deviceId];
       delete qrCodes[deviceId];
+      delete retryCountMap[deviceId];
       return;
     }
 
-    console.log("🔄 Reconnecting in 3s:", deviceId);
-    try { await client.destroy(); } catch {}
+    console.log("🔄 Reconnecting:", deviceId, `(attempt ${(retryCountMap[deviceId] || 0) + 1})`);
+    try {
+      await client.destroy();
+    } catch {}
     delete clients[deviceId];
     delete infoMap[deviceId];
 
-    setTimeout(() => createDevice(deviceId), 3000);
+    retryCountMap[deviceId] = (retryCountMap[deviceId] || 0) + 1;
+    const delay = Math.min(3000 * retryCountMap[deviceId], 30000); // exponential backoff
+    setTimeout(() => createDevice(deviceId), delay);
   });
 
   try {
@@ -169,87 +237,74 @@ async function createDevice(deviceId) {
   } catch (err) {
     console.log("Init error:", deviceId, err.message);
     delete clients[deviceId];
-    setTimeout(() => createDevice(deviceId), 5000);
+    retryCountMap[deviceId] = (retryCountMap[deviceId] || 0) + 1;
+    const delay = Math.min(5000 * retryCountMap[deviceId], 30000);
+    setTimeout(() => createDevice(deviceId), delay);
   }
 }
 
 // ===============================
-// 🔥 SEND TO ONE NUMBER — PARALLEL MEDIA
+// 🔥 SEND TO ONE NUMBER
 // ===============================
 async function sendToNumber(client, number, message, files) {
-  let num = number.trim().replace(/\D/g, "");
-  if (!num.startsWith("91")) num = "91" + num;
-  const chatId = num + "@c.us";
+  const chatId = normalizeNumber(number);
 
-  const isRegistered = await client.isRegisteredUser(chatId);
+  let isRegistered = false;
+  try {
+    isRegistered = await client.isRegisteredUser(chatId);
+  } catch {
+    return { number, status: "failed", reason: "check_failed" };
+  }
+
   if (!isRegistered) return { number, status: "nonwa" };
 
-  // 🔥 Send message + ALL files fully in parallel
-  const tasks = [];
+  try {
+    const tasks = [];
 
-  if (message) {
-    tasks.push(client.sendMessage(chatId, message));
-  }
+    if (message && message.trim()) {
+      tasks.push(client.sendMessage(chatId, message.trim()));
+    }
 
-  if (files && files.length > 0) {
-    for (const file of files) {
-      tasks.push(
-        (async () => {
-          try {
-            // 🔥 Use cache — same file not re-read for every number
+    if (files && files.length > 0) {
+      for (const file of files) {
+        tasks.push(
+          (async () => {
             const fileData = await getFileBase64(file.path);
-
-            // 🔥 Correct MIME for all types (image/pdf/video/audio/doc)
             const mime = file.mimetype || "application/octet-stream";
             const media = new MessageMedia(mime, fileData, file.originalname);
-
             await client.sendMessage(chatId, media, {
-              sendMediaAsDocument: isPDF(mime) || isDocument(mime), // 🔥 PDFs as document
+              sendMediaAsDocument: isPDF(mime) || isDocument(mime),
             });
-          } catch (e) {
-            console.log("Media send error:", file.originalname, e.message);
-          }
-        })()
-      );
+          })()
+        );
+      }
     }
+
+    await Promise.all(tasks);
+    return { number, status: "sent" };
+  } catch (err) {
+    console.log(`❌ Send failed for ${number}:`, err.message);
+    return { number, status: "failed", reason: "send_error" };
   }
-
-  // 🔥 All parallel — message + all files at same time
-  await Promise.allSettled(tasks);
-
-  return { number, status: "sent" };
-}
-
-// 🔥 MIME TYPE HELPERS
-function isPDF(mime) {
-  return mime === "application/pdf";
-}
-
-function isDocument(mime) {
-  return [
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "text/plain",
-    "application/zip",
-  ].includes(mime);
 }
 
 // ===============================
-// 🔥 GET READY DEVICES — ROUND ROBIN
+// 🔥 ROUND-ROBIN DEVICE SELECTOR
 // ===============================
 let rrIndex = 0;
-function getNextDevice() {
-  const deviceIds = Object.keys(clients).filter((id) => readyMap[id]);
-  if (deviceIds.length === 0) return null;
+function getReadyDeviceIds() {
+  return Object.keys(clients).filter((id) => readyMap[id] && clients[id]);
+}
+
+function getNextDevice(deviceIds) {
+  if (!deviceIds.length) return null;
   const device = deviceIds[rrIndex % deviceIds.length];
-  rrIndex++;
+  rrIndex = (rrIndex + 1) % deviceIds.length;
   return device;
 }
 
 // ===============================
-// 🔥 QUEUE WORKER — MULTI-DEVICE PARALLEL BATCHES
+// 🔥 QUEUE WORKER
 // ===============================
 async function processQueue() {
   if (queueRunning || pendingQueue.length === 0) return;
@@ -260,72 +315,78 @@ async function processQueue() {
   while (pendingQueue.length > 0) {
     const job = pendingQueue[0];
 
-    if (job.status !== "pending") {
+    if (job.status === "cancelled") {
       pendingQueue.shift();
       continue;
     }
 
     job.status = "running";
-    job.startedAt = new Date();
+    job.startedAt = new Date().toISOString();
 
-    const deviceIds = Object.keys(clients).filter((id) => readyMap[id]);
+    const deviceIds = getReadyDeviceIds();
 
     if (deviceIds.length === 0) {
-      console.log("No devices. Waiting 10s...");
+      console.log("⚠️ No devices ready. Waiting 15s...");
       job.status = "pending";
-      await sleep(10000);
+      await sleep(15000);
       continue;
     }
 
     const results = [];
     const numbers = job.numbers;
+    const BATCH_SIZE = Math.min(12 * deviceIds.length, 60);
 
-    // 🔥 BATCH SIZE scales with device count — more devices = bigger batches
-    const BATCH_SIZE = Math.min(10 * deviceIds.length, 50);
-
-    console.log(`📡 ${deviceIds.length} device(s) active. Batch size: ${BATCH_SIZE}`);
+    console.log(`📡 ${deviceIds.length} device(s). Batch: ${BATCH_SIZE}. Total: ${numbers.length}`);
 
     for (let i = 0; i < numbers.length; i += BATCH_SIZE) {
       const batch = numbers.slice(i, i + BATCH_SIZE);
+      const activeDevices = getReadyDeviceIds();
+
+      if (!activeDevices.length) {
+        console.log("⚠️ Devices went offline. Pausing 10s...");
+        await sleep(10000);
+        i -= BATCH_SIZE; // retry this batch
+        continue;
+      }
 
       const batchResults = await Promise.allSettled(
         batch.map(async (number, idx) => {
-          // 🔥 Distribute across all ready devices evenly
-          const deviceId = deviceIds[idx % deviceIds.length];
+          const deviceId = activeDevices[idx % activeDevices.length];
           const client = clients[deviceId];
           if (!client || !readyMap[deviceId]) return { number, status: "failed" };
           try {
-            const result = await sendToNumber(client, number, job.message, job.files);
-            return { ...result, deviceId };
+            return { ...(await sendToNumber(client, number, job.message, job.files)), deviceId };
           } catch {
             return { number, deviceId, status: "failed" };
           }
         })
       );
 
-      batchResults.forEach((r) => {
-        if (r.status === "fulfilled") results.push(r.value);
-        else results.push({ status: "failed" });
-      });
+      batchResults.forEach((r) =>
+        results.push(r.status === "fulfilled" ? r.value : { status: "failed" })
+      );
 
       job.progress = results.length;
+      const sent = results.filter((r) => r.status === "sent").length;
+      const nonwa = results.filter((r) => r.status === "nonwa").length;
+      const failed = results.filter((r) => r.status === "failed").length;
 
-      // 🔥 Shorter delay between batches: 2-3s (was 5-8s)
+      console.log(`📊 ${results.length}/${numbers.length} | ✅ ${sent} | 🚫 ${nonwa} | ❌ ${failed}`);
+
       if (i + BATCH_SIZE < numbers.length) {
-        const delay = 2000 + Math.random() * 1000;
-        console.log(`⏱ ${results.length}/${numbers.length} done. Next in ${(delay/1000).toFixed(1)}s`);
+        const delay = jitter(1200, 500);
         await sleep(delay);
       }
     }
 
     job.status = "completed";
     job.results = results;
-    job.completedAt = new Date();
+    job.completedAt = new Date().toISOString();
 
     const sentCount = results.filter((r) => r.status === "sent").length;
     console.log(`✅ Job ${job.id} done. Sent: ${sentCount}/${numbers.length}`);
 
-    // 🔥 Update Django
+    // Notify Django backend
     if (job.userId) {
       try {
         const filesData = (job.files || []).map((f) => ({
@@ -333,13 +394,11 @@ async function processQueue() {
           type: f.mimetype,
         }));
 
-        const updatedResults = results.map((r) => ({ ...r, files: filesData }));
-
         await fetch("https://cloudwhatsapp-1.onrender.com/api/send-whatsapp/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            results: updatedResults,
+            results: results.map((r) => ({ ...r, files: filesData })),
             message: job.message,
             total: job.numbers.length,
             user_id: job.userId,
@@ -348,51 +407,72 @@ async function processQueue() {
           }),
         });
 
-        console.log(`📤 Django: campaign ${job.campaignId} → completed`);
+        console.log(`📤 Django notified: campaign ${job.campaignId}`);
       } catch (e) {
-        console.log("Django save error:", e.message);
+        console.log("⚠️ Django notify error:", e.message);
       }
     }
 
     pendingQueue.shift();
 
-    // 🔥 30s between jobs (was 60s)
     if (pendingQueue.length > 0) {
-      console.log("⏳ Next job in 30s...");
-      await sleep(30000);
+      console.log("⏳ Next job in 25s...");
+      await sleep(25000);
     }
   }
 
-  // 🔥 Clear file cache after all jobs done
   fileCache.clear();
-
   queueRunning = false;
-  console.log("✅ Queue done.");
+  console.log("✅ All queue jobs done.");
 }
 
 // ===============================
 // API ROUTES
 // ===============================
 
+// Health check
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    uptime: process.uptime(),
+    devices: Object.keys(clients).length,
+    readyDevices: getReadyDeviceIds().length,
+    queueJobs: pendingQueue.length,
+    queueRunning,
+    memory: process.memoryUsage(),
+  });
+});
+
 app.get("/create-device", async (req, res) => {
   const { deviceId } = req.query;
   if (!deviceId) return res.json({ status: "failed", message: "deviceId required" });
-  if (clients[deviceId]) return res.json({ status: "already_exists", ready: readyMap[deviceId] || false });
-  res.json({ status: "creating", deviceId });
+  if (clients[deviceId])
+    return res.json({ status: "already_exists", ready: readyMap[deviceId] || false });
   createDevice(deviceId);
+  res.json({ status: "creating", deviceId });
 });
 
 app.get("/get-qr", (req, res) => {
   const { deviceId } = req.query;
-  res.json({ qr: qrCodes[deviceId] || "", ready: readyMap[deviceId] || false });
+  if (!deviceId) return res.json({ status: "failed", message: "deviceId required" });
+  res.json({
+    qr: qrCodes[deviceId] || "",
+    ready: readyMap[deviceId] || false,
+    exists: !!clients[deviceId],
+  });
 });
 
 app.get("/get-device", (req, res) => {
   const { deviceId } = req.query;
   if (!deviceId) return res.json({ status: "failed" });
   const info = infoMap[deviceId];
-  if (!info) return res.json({ status: "not_ready" });
-  res.json({ number: info.wid?.user || "", name: info.pushname || "", ready: readyMap[deviceId] || false });
+  if (!info) return res.json({ status: "not_ready", ready: false });
+  res.json({
+    number: info.wid?.user || "",
+    name: info.pushname || "",
+    ready: readyMap[deviceId] || false,
+    connectedAt: info.connectedAt || null,
+  });
 });
 
 app.get("/list-devices", (req, res) => {
@@ -401,19 +481,25 @@ app.get("/list-devices", (req, res) => {
     ready: readyMap[id] || false,
     number: infoMap[id]?.wid?.user || "",
     name: infoMap[id]?.pushname || "",
+    connectedAt: infoMap[id]?.connectedAt || null,
   }));
-  res.json({ devices: deviceList });
+  res.json({ devices: deviceList, total: deviceList.length, ready: deviceList.filter((d) => d.ready).length });
 });
 
 app.get("/delete-device", async (req, res) => {
   const { deviceId } = req.query;
   const client = clients[deviceId];
   if (!client) return res.json({ status: "not_found" });
-  try { await client.destroy(); } catch {}
+
+  try {
+    await client.destroy();
+  } catch {}
+
   delete clients[deviceId];
   delete readyMap[deviceId];
   delete infoMap[deviceId];
   delete qrCodes[deviceId];
+  delete retryCountMap[deviceId];
 
   const sessionPath = `./sessions/.wwebjs_auth/session-${deviceId}`;
   if (fs.existsSync(sessionPath)) {
@@ -429,13 +515,18 @@ app.get("/logout", async (req, res) => {
   const client = clients[deviceId];
   if (!client) return res.json({ status: "not_found" });
 
-  try { await client.logout(); } catch {}
-  try { await client.destroy(); } catch {}
+  try {
+    await client.logout();
+  } catch {}
+  try {
+    await client.destroy();
+  } catch {}
 
   delete clients[deviceId];
   delete readyMap[deviceId];
   delete infoMap[deviceId];
   delete qrCodes[deviceId];
+  delete retryCountMap[deviceId];
 
   const sessionPath = `./sessions/.wwebjs_auth/session-${deviceId}`;
   if (fs.existsSync(sessionPath)) {
@@ -451,30 +542,32 @@ app.get("/queue-status", (req, res) => {
     running: queueRunning,
     jobs: pendingQueue.map((j) => ({
       id: j.id,
+      campaignId: j.campaignId,
       status: j.status,
       total: j.numbers.length,
       progress: j.progress || 0,
+      sent: (j.results || []).filter((r) => r.status === "sent").length,
+      nonwa: (j.results || []).filter((r) => r.status === "nonwa").length,
+      failed: (j.results || []).filter((r) => r.status === "failed").length,
       createdAt: j.createdAt,
+      startedAt: j.startedAt || null,
     })),
   });
 });
 
+app.get("/cancel-job", (req, res) => {
+  const { jobId } = req.query;
+  const job = pendingQueue.find((j) => String(j.id) === String(jobId));
+  if (!job) return res.json({ status: "not_found" });
+  if (job.status === "running") return res.json({ status: "cannot_cancel", message: "Job is running" });
+  job.status = "cancelled";
+  res.json({ status: "cancelled", jobId });
+});
+
 // ===============================
-// 🔥 SEND BULK — ROLE-BASED + MULTI-DEVICE
+// 🔥 SEND BULK
 // ===============================
 app.post("/send-bulk", upload.any(), async (req, res) => {
-
-  const totalNumbers = Array.isArray(req.body.numbers)
-    ? req.body.numbers.length
-    : 1;
-
-  if (totalNumbers > 10 && !isWorkingHours()) {
-    return res.json({
-      status: "blocked",
-      message: "Campaign allowed only between 9AM - 6PM",
-    });
-  }
-
   let numbers = req.body.numbers || [];
   const message = req.body.message || "";
   const userId = req.body.userId || null;
@@ -485,8 +578,23 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
   if (!Array.isArray(numbers)) numbers = [numbers];
   numbers = [...new Set(numbers.map((n) => n.trim()).filter(Boolean))];
 
-  const deviceIds = Object.keys(clients).filter((id) => readyMap[id]);
-  if (deviceIds.length === 0) {
+  if (!numbers.length) {
+    return res.json({ status: "failed", message: "No numbers provided" });
+  }
+
+  if (!message && !files.length) {
+    return res.json({ status: "failed", message: "Provide message or files" });
+  }
+
+  if (numbers.length > 10 && !isWorkingHours()) {
+    return res.json({
+      status: "blocked",
+      message: "Bulk campaigns only allowed 9AM–6PM IST",
+    });
+  }
+
+  const deviceIds = getReadyDeviceIds();
+  if (!deviceIds.length) {
     return res.json({ status: "no_device", message: "No WhatsApp device connected" });
   }
 
@@ -504,7 +612,8 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
       userRole,
       status: "pending",
       progress: 0,
-      createdAt: new Date(),
+      results: [],
+      createdAt: new Date().toISOString(),
     };
     pendingQueue.push(job);
     processQueue();
@@ -512,22 +621,20 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
       status: "queued",
       jobId: job.id,
       total: numbers.length,
-      message: "Campaign queued.",
+      message: `Campaign queued. ${numbers.length} numbers in queue.`,
       results: numbers.map((n) => ({ number: n, status: "pending" })),
     });
   }
 
-  // 🔥 INSTANT — all numbers across all devices in parallel
+  // Instant send (admin or ≤15 numbers)
   const results = await Promise.allSettled(
     numbers.map(async (number, index) => {
-      // 🔥 Round-robin across ALL ready devices
       const deviceId = deviceIds[index % deviceIds.length];
       const client = clients[deviceId];
       if (!client || !readyMap[deviceId]) return { number, status: "failed" };
       try {
-        const result = await sendToNumber(client, number, message, files);
-        return { ...result, deviceId };
-      } catch (err) {
+        return { ...(await sendToNumber(client, number, message, files)), deviceId };
+      } catch {
         return { number, deviceId, status: "failed" };
       }
     })
@@ -548,29 +655,55 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
 });
 
 // ===============================
-// 🔥 AUTO-RESTORE SESSIONS ON STARTUP
+// 🔥 AUTO-RESTORE SESSIONS
 // ===============================
 async function restoreSessions() {
   const sessionsDir = "./sessions/.wwebjs_auth";
   if (!fs.existsSync(sessionsDir)) return;
 
-  const folders = fs.readdirSync(sessionsDir);
+  const folders = fs.readdirSync(sessionsDir).filter((f) => f.startsWith("session-"));
+  console.log(`🔄 Restoring ${folders.length} session(s)...`);
+
   for (const folder of folders) {
-    if (folder.startsWith("session-")) {
-      const deviceId = folder.replace("session-", "");
-      console.log("🔄 Restoring:", deviceId);
-      createDevice(deviceId);
-      await sleep(2000);
-    }
+    const deviceId = folder.replace("session-", "");
+    console.log("  ↻ Restoring:", deviceId);
+    createDevice(deviceId);
+    await sleep(2500); // stagger startup
   }
 }
 
 // ===============================
-// SERVER START
+// GRACEFUL SHUTDOWN
+// ===============================
+async function gracefulShutdown(signal) {
+  console.log(`\n🛑 ${signal} received. Shutting down...`);
+
+  for (const deviceId of Object.keys(clients)) {
+    try {
+      await clients[deviceId].destroy();
+      console.log("  🔌 Destroyed:", deviceId);
+    } catch {}
+  }
+
+  process.exit(0);
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("uncaughtException", (err) => {
+  console.error("💥 Uncaught exception:", err.message);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("💥 Unhandled rejection:", reason);
+});
+
+// ===============================
+// START SERVER
 // ===============================
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, "0.0.0.0", async () => {
-  console.log(`🚀 Server running on ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📋 Health check: http://localhost:${PORT}/health`);
   await restoreSessions();
 });
