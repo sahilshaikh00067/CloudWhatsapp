@@ -33,9 +33,12 @@ if (!fs.existsSync("sessions")) fs.mkdirSync("sessions");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) => cb(null, file.originalname),
+  filename: (req, file, cb) => cb(null, Date.now() + "_" + file.originalname), // 🔥 Unique names, no overwrite
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 🔥 50MB max per file
+});
 
 // ===============================
 // HELPER: IS WITHIN WORKING HOURS
@@ -44,6 +47,22 @@ function isWorkingHours() {
   const now = new Date();
   const hours = now.getHours();
   return hours >= 9 && hours < 18;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ===============================
+// 🔥 FILE → BASE64 CACHE (avoid re-reading same file)
+// ===============================
+const fileCache = new Map();
+
+async function getFileBase64(filePath) {
+  if (fileCache.has(filePath)) return fileCache.get(filePath);
+  const data = await fs.promises.readFile(filePath, { encoding: "base64" });
+  fileCache.set(filePath, data);
+  return data;
 }
 
 // ===============================
@@ -58,7 +77,7 @@ async function createDevice(deviceId) {
   const client = new Client({
     authStrategy: new LocalAuth({
       clientId: deviceId,
-      dataPath: "./sessions",         // 🔥 Persistent sessions folder
+      dataPath: "./sessions",
     }),
     puppeteer: {
       headless: true,
@@ -77,10 +96,12 @@ async function createDevice(deviceId) {
         "--window-size=800,600",
         "--single-process",
         "--disable-renderer-backgrounding",
+        "--no-zygote",                        // 🔥 Faster startup
+        "--disable-accelerated-2d-canvas",    // 🔥 Less CPU
+        "--disable-web-security",             // 🔥 Faster load
       ],
       timeout: 90000,
     },
-    // 🔥 KEY: Phone se logout na ho — auto takeover
     takeoverOnConflict: true,
     takeoverTimeoutMs: 0,
     restartOnAuthFail: true,
@@ -91,7 +112,6 @@ async function createDevice(deviceId) {
 
   client.on("qr", async (qr) => {
     try {
-      // 🔥 Fast QR — lowest error correction, small scale
       qrCodes[deviceId] = await qrcode.toDataURL(qr, {
         errorCorrectionLevel: "L",
         scale: 5,
@@ -106,7 +126,7 @@ async function createDevice(deviceId) {
 
   client.on("authenticated", () => {
     console.log("🔐 Authenticated:", deviceId);
-    qrCodes[deviceId] = ""; // QR clear — scan done
+    qrCodes[deviceId] = "";
   });
 
   client.on("ready", () => {
@@ -124,12 +144,10 @@ async function createDevice(deviceId) {
     readyMap[deviceId] = false;
   });
 
-  // 🔥 DISCONNECT HANDLER — smart reconnect
   client.on("disconnected", async (reason) => {
     console.log("⚠️ Disconnected:", deviceId, "reason:", reason);
     readyMap[deviceId] = false;
 
-    // 🔥 ONLY if phone manually logged out — don't reconnect
     if (reason === "LOGOUT") {
       console.log("📵 Manual logout:", deviceId, "— no reconnect");
       delete clients[deviceId];
@@ -138,7 +156,6 @@ async function createDevice(deviceId) {
       return;
     }
 
-    // Network issues, server restart etc → auto reconnect
     console.log("🔄 Reconnecting in 3s:", deviceId);
     try { await client.destroy(); } catch {}
     delete clients[deviceId];
@@ -152,13 +169,12 @@ async function createDevice(deviceId) {
   } catch (err) {
     console.log("Init error:", deviceId, err.message);
     delete clients[deviceId];
-    // Retry on failure
     setTimeout(() => createDevice(deviceId), 5000);
   }
 }
 
 // ===============================
-// 🔥 SEND TO ONE NUMBER — FAST
+// 🔥 SEND TO ONE NUMBER — PARALLEL MEDIA
 // ===============================
 async function sendToNumber(client, number, message, files) {
   let num = number.trim().replace(/\D/g, "");
@@ -168,30 +184,72 @@ async function sendToNumber(client, number, message, files) {
   const isRegistered = await client.isRegisteredUser(chatId);
   if (!isRegistered) return { number, status: "nonwa" };
 
+  // 🔥 Send message + ALL files fully in parallel
+  const tasks = [];
+
   if (message) {
-    await client.sendMessage(chatId, message);
+    tasks.push(client.sendMessage(chatId, message));
   }
 
-  // 🔥 Files in parallel — faster
   if (files && files.length > 0) {
-    await Promise.all(
-      files.map(async (file) => {
-        try {
-          const fileData = await fs.promises.readFile(file.path, { encoding: "base64" });
-          const media = new MessageMedia(file.mimetype, fileData, file.originalname);
-          await client.sendMessage(chatId, media);
-        } catch (e) {
-          console.log("Media send error:", e.message);
-        }
-      })
-    );
+    for (const file of files) {
+      tasks.push(
+        (async () => {
+          try {
+            // 🔥 Use cache — same file not re-read for every number
+            const fileData = await getFileBase64(file.path);
+
+            // 🔥 Correct MIME for all types (image/pdf/video/audio/doc)
+            const mime = file.mimetype || "application/octet-stream";
+            const media = new MessageMedia(mime, fileData, file.originalname);
+
+            await client.sendMessage(chatId, media, {
+              sendMediaAsDocument: isPDF(mime) || isDocument(mime), // 🔥 PDFs as document
+            });
+          } catch (e) {
+            console.log("Media send error:", file.originalname, e.message);
+          }
+        })()
+      );
+    }
   }
+
+  // 🔥 All parallel — message + all files at same time
+  await Promise.allSettled(tasks);
 
   return { number, status: "sent" };
 }
 
+// 🔥 MIME TYPE HELPERS
+function isPDF(mime) {
+  return mime === "application/pdf";
+}
+
+function isDocument(mime) {
+  return [
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/plain",
+    "application/zip",
+  ].includes(mime);
+}
+
 // ===============================
-// 🔥 QUEUE WORKER — FASTER BATCHES
+// 🔥 GET READY DEVICES — ROUND ROBIN
+// ===============================
+let rrIndex = 0;
+function getNextDevice() {
+  const deviceIds = Object.keys(clients).filter((id) => readyMap[id]);
+  if (deviceIds.length === 0) return null;
+  const device = deviceIds[rrIndex % deviceIds.length];
+  rrIndex++;
+  return device;
+}
+
+// ===============================
+// 🔥 QUEUE WORKER — MULTI-DEVICE PARALLEL BATCHES
 // ===============================
 async function processQueue() {
   if (queueRunning || pendingQueue.length === 0) return;
@@ -221,14 +279,19 @@ async function processQueue() {
 
     const results = [];
     const numbers = job.numbers;
-    const BATCH_SIZE = 15; // 🔥 Larger batches = faster
+
+    // 🔥 BATCH SIZE scales with device count — more devices = bigger batches
+    const BATCH_SIZE = Math.min(10 * deviceIds.length, 50);
+
+    console.log(`📡 ${deviceIds.length} device(s) active. Batch size: ${BATCH_SIZE}`);
 
     for (let i = 0; i < numbers.length; i += BATCH_SIZE) {
       const batch = numbers.slice(i, i + BATCH_SIZE);
 
       const batchResults = await Promise.allSettled(
         batch.map(async (number, idx) => {
-          const deviceId = deviceIds[(i + idx) % deviceIds.length];
+          // 🔥 Distribute across all ready devices evenly
+          const deviceId = deviceIds[idx % deviceIds.length];
           const client = clients[deviceId];
           if (!client || !readyMap[deviceId]) return { number, status: "failed" };
           try {
@@ -247,10 +310,10 @@ async function processQueue() {
 
       job.progress = results.length;
 
-      // 🔥 5-8s delay (was 8-12s)
+      // 🔥 Shorter delay between batches: 2-3s (was 5-8s)
       if (i + BATCH_SIZE < numbers.length) {
-        const delay = 5000 + Math.random() * 3000;
-        console.log(`⏱ ${results.length}/${numbers.length} done. Next batch in ${Math.round(delay/1000)}s`);
+        const delay = 2000 + Math.random() * 1000;
+        console.log(`⏱ ${results.length}/${numbers.length} done. Next in ${(delay/1000).toFixed(1)}s`);
         await sleep(delay);
       }
     }
@@ -262,7 +325,7 @@ async function processQueue() {
     const sentCount = results.filter((r) => r.status === "sent").length;
     console.log(`✅ Job ${job.id} done. Sent: ${sentCount}/${numbers.length}`);
 
-    // 🔥 Update Django → COMPLETED
+    // 🔥 Update Django
     if (job.userId) {
       try {
         const filesData = (job.files || []).map((f) => ({
@@ -293,19 +356,18 @@ async function processQueue() {
 
     pendingQueue.shift();
 
-    // 60s between jobs (was 2 min)
+    // 🔥 30s between jobs (was 60s)
     if (pendingQueue.length > 0) {
-      console.log("⏳ Next job in 60s...");
-      await sleep(60000);
+      console.log("⏳ Next job in 30s...");
+      await sleep(30000);
     }
   }
 
+  // 🔥 Clear file cache after all jobs done
+  fileCache.clear();
+
   queueRunning = false;
   console.log("✅ Queue done.");
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ===============================
@@ -343,7 +405,6 @@ app.get("/list-devices", (req, res) => {
   res.json({ devices: deviceList });
 });
 
-// 🔥 DELETE — session bhi clear karo
 app.get("/delete-device", async (req, res) => {
   const { deviceId } = req.query;
   const client = clients[deviceId];
@@ -363,7 +424,6 @@ app.get("/delete-device", async (req, res) => {
   res.json({ status: "deleted" });
 });
 
-// 🔥 LOGOUT — phone se manually logout
 app.get("/logout", async (req, res) => {
   const { deviceId } = req.query;
   const client = clients[deviceId];
@@ -400,12 +460,19 @@ app.get("/queue-status", (req, res) => {
 });
 
 // ===============================
-// 🔥 SEND BULK — ROLE-BASED
+// 🔥 SEND BULK — ROLE-BASED + MULTI-DEVICE
 // ===============================
 app.post("/send-bulk", upload.any(), async (req, res) => {
 
-  if (!isWorkingHours()) {
-    return res.json({ status: "blocked", message: "Campaign closed. Working hours: 9AM - 6PM (Mon-Sat)" });
+  const totalNumbers = Array.isArray(req.body.numbers)
+    ? req.body.numbers.length
+    : 1;
+
+  if (totalNumbers > 10 && !isWorkingHours()) {
+    return res.json({
+      status: "blocked",
+      message: "Campaign allowed only between 9AM - 6PM",
+    });
   }
 
   let numbers = req.body.numbers || [];
@@ -426,7 +493,6 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
   const isAdmin = userRole === "admin";
   const shouldQueue = !isAdmin && numbers.length > 15;
 
-  // QUEUE
   if (shouldQueue) {
     const job = {
       id: Date.now(),
@@ -446,14 +512,15 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
       status: "queued",
       jobId: job.id,
       total: numbers.length,
-      message: "Campaign queued. Will complete in 30-50 minutes.",
+      message: "Campaign queued.",
       results: numbers.map((n) => ({ number: n, status: "pending" })),
     });
   }
 
-  // 🔥 INSTANT — All parallel
+  // 🔥 INSTANT — all numbers across all devices in parallel
   const results = await Promise.allSettled(
     numbers.map(async (number, index) => {
+      // 🔥 Round-robin across ALL ready devices
       const deviceId = deviceIds[index % deviceIds.length];
       const client = clients[deviceId];
       if (!client || !readyMap[deviceId]) return { number, status: "failed" };
@@ -493,7 +560,7 @@ async function restoreSessions() {
       const deviceId = folder.replace("session-", "");
       console.log("🔄 Restoring:", deviceId);
       createDevice(deviceId);
-      await sleep(2000); // Stagger to avoid overload
+      await sleep(2000);
     }
   }
 }
@@ -505,6 +572,5 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`🚀 Server running on ${PORT}`);
-
   await restoreSessions();
 });

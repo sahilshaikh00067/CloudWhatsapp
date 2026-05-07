@@ -276,6 +276,9 @@ def send_whatsapp(request):
         campaign_id = request.data.get("campaign_id", None)      # 🔥 for queue update
 
         user = User.objects.get(id=user_id)
+        print("🔥 RESULTS RECEIVED:", results)
+        print("🔥 RESULTS TYPE:", type(results))
+        print("🔥 RESULTS LENGTH:", len(results))
 
         # -----------------------------------------------
         # 🔥 CASE 1: Queue worker ne campaign update bheja
@@ -415,7 +418,7 @@ def get_user(request):
 def get_campaigns(request):
     try:
         user_id = request.GET.get("user_id")
-
+ 
         if not user_id:
             return Response([])
 
