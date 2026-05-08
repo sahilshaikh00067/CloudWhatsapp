@@ -40,34 +40,70 @@ export default function Header() {
 
   const [user, setUser] = useState(null);
 
-  useEffect(() => {
-    const fetchCredit = async () => {
-      const stored = JSON.parse(sessionStorage.getItem("user"));
-      if (!stored?.id) return;
+useEffect(() => {
 
-      try {
-        const res = await fetch(
-          `https://whatsappsms-olho.onrender.com/api/get-user/?user_id=${stored.id}`
+  const fetchCredit = async () => {
+
+    const stored = JSON.parse(sessionStorage.getItem("user"));
+
+    if (!stored?.id) return;
+
+    try {
+
+      const res = await fetch(
+        `https://whatsappsms-olho.onrender.com/api/get-user/?user_id=${stored.id}`
+      );
+
+      const data = await res.json();
+
+      if (data.credit !== undefined) {
+
+        const updatedUser = {
+          ...stored,
+          credit: data.credit
+        };
+
+        setUser(updatedUser);
+
+        sessionStorage.setItem(
+          "user",
+          JSON.stringify(updatedUser)
         );
-        const data = await res.json();
-
-        if (data.credit !== undefined) {
-          const updatedUser = {
-            ...stored,
-            credit: data.credit
-          };
-
-          setUser(updatedUser);
-          sessionStorage.setItem("user", JSON.stringify(updatedUser));
-        }
-      } catch (err) {
-        console.log("Credit fetch error:", err);
       }
-    };
 
+    } catch (err) {
+      console.log("Credit fetch error:", err);
+    }
+  };
+
+  // 🔥 FIRST LOAD
+  fetchCredit();
+
+  // 🔥 EVERY 3 SEC AUTO UPDATE
+  const interval = setInterval(() => {
     fetchCredit();
-  }, []);
+  }, 3000);
 
+  // 🔥 REALTIME EVENT
+  const handleRealtimeCredit = () => {
+    fetchCredit();
+  };
+
+  window.addEventListener(
+    "campaignUpdated",
+    handleRealtimeCredit
+  );
+
+  return () => {
+    clearInterval(interval);
+
+    window.removeEventListener(
+      "campaignUpdated",
+      handleRealtimeCredit
+    );
+  };
+
+}, []);
   // 🔥 FIX ROLE
   const role = sessionStorage.getItem("role")?.toLowerCase();
 

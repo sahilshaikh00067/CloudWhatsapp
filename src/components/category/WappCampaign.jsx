@@ -329,6 +329,8 @@ export default function WappCampaign() {
 resetForm();
 
 window.dispatchEvent(new Event("campaignUpdated"));
+
+window.dispatchEvent(new Event("creditUpdated"));
     } catch (err) {
       console.log("ERROR:", err);
       showModal("error", "Unexpected Error ❌", "Something went wrong. Please try again.");
