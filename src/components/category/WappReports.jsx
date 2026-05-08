@@ -134,35 +134,52 @@ const WappReports = () => {
     setOpenRow(openRow === index ? null : index);
   };
 
-  const handleDownload = (data) => {
+const handleDownload = (data) => {
 
-    const rows = (data.results || []).map((r, index) => ({
+  try {
 
-      "Sr No": index + 1,
+    console.log("DOWNLOAD DATA:", data);
 
-      "Number":
+    const rows = (data.results || []).map((r, index) => {
+
+      const number =
         r.number ||
         r.phone ||
         r.mobile ||
         r.to ||
-        "",
+        "";
 
-      "Status":
-        (
-          r.status ||
-          "unknown"
-        ).toUpperCase(),
+      const status =
+        r.status ||
+        "unknown";
 
-      "Message":
-        data.message || "",
+      return {
 
-      "Campaign":
-        data.name || "",
+        "Sr No": index + 1,
 
-      "Date":
-        data.date || "",
+        "Number": number,
 
-    }));
+        "Status": status.toUpperCase(),
+
+        "Message":
+          data.message || "",
+
+        "Campaign":
+          data.name ||
+          `Campaign-${data.id || ""}`,
+
+        "Date":
+          data.created_at
+            ? new Date(
+                data.created_at
+              ).toLocaleString()
+            : "",
+
+      };
+
+    });
+
+    console.log("ROWS:", rows);
 
     const headers = [
       "Sr No",
@@ -172,39 +189,65 @@ const WappReports = () => {
       "Campaign",
       "Date"
     ];
+
     const csvContent = [
+
       headers.join(","),
-      ...rows.map((r) =>
-        [
-          r["Sr No"],
-          `"${r["Number"]}"`,
-          `"${r["Status"]}"`,
-          `"${r["Message"]}"`,
-          `"${r["Campaign"]}"`,
-          `"${r["Date"]}"`
-        ].join(",")
-      )
+
+      ...rows.map((r) => [
+
+        r["Sr No"],
+
+        `"${r["Number"]}"`,
+
+        `"${r["Status"]}"`,
+
+        `"${r["Message"]}"`,
+
+        `"${r["Campaign"]}"`,
+
+        `"${r["Date"]}"`
+
+      ].join(","))
+
     ].join("\n");
 
     const blob = new Blob(
       [csvContent],
-      { type: "text/csv;charset=utf-8;" }
+      {
+        type: "text/csv;charset=utf-8;"
+      }
     );
 
-    const url = URL.createObjectURL(blob);
+    const url =
+      URL.createObjectURL(blob);
 
-    const a = document.createElement("a");
+    const link =
+      document.createElement("a");
 
-    a.href = url;
+    link.href = url;
 
-    a.download = `${data.name}-report.csv`;
+    link.download =
+      `campaign-report-${Date.now()}.csv`;
 
-    document.body.appendChild(a);
+    document.body.appendChild(link);
 
-    a.click();
+    link.click();
 
-    document.body.removeChild(a);
-  };
+    document.body.removeChild(link);
+
+  } catch (err) {
+
+    console.log(
+      "DOWNLOAD ERROR:",
+      err
+    );
+
+    alert(
+      "Download failed ❌"
+    );
+  }
+};
 
   // ===============================
   // PAGINATION
