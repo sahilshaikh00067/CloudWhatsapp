@@ -13,9 +13,9 @@ def create_user(request):
         username = str(
     request.data.get("username", "")
 ).strip().lower()
-        username = str(
-    request.data.get("username", "")
-).strip().lower()
+        password = str(
+    request.data.get("password", "")
+).strip()
         role = request.data.get("role")
         parent_username = request.data.get("parent")
 
@@ -150,8 +150,12 @@ def update_user(request):
                 parent.credit += abs(diff)
                 parent.save()
 
-        user.username = request.data.get("username", user.username)
-        user.password = request.data.get("password", user.password)
+        user.username = str(
+    request.data.get("username", user.username)
+).strip().lower()
+        user.password = str(
+    request.data.get("password", user.password)
+).strip()
         user.role = request.data.get("role", user.role)
         user.credit = new_credit
         user.save()
@@ -209,7 +213,9 @@ def toggle_user_status(request):
 def reset_password(request):
     try:
         user = User.objects.get(id=request.data.get("user_id"))
-        user.password = request.data.get("password")
+        user.password = str(
+    request.data.get("password", "")
+).strip()
         user.save()
         return Response({"status": "success"})
     except Exception as e:
@@ -298,40 +304,87 @@ def send_whatsapp(request):
         message     = request.data.get("message", "")
         total       = int(request.data.get("total", 0))
         user_id     = request.data.get("user_id")
-        status      = request.data.get("status", "completed")   # 🔥 "pending" or "completed"
-        campaign_id = request.data.get("campaign_id", None)      # 🔥 for queue update
+        status      = request.data.get("status", "completed")
+        campaign_id = request.data.get("campaign_id", None)
 
         user = User.objects.get(id=user_id)
+
         print("🔥 RESULTS RECEIVED:", results)
         print("🔥 RESULTS TYPE:", type(results))
         print("🔥 RESULTS LENGTH:", len(results))
 
+        # ======================================================
+        # 🔥 CLEAN RESULTS FORMAT — IMPORTANT FIX
+        # ======================================================
+        clean_results = []
+
+        for r in results:
+
+            if isinstance(r, dict):
+
+                clean_results.append({
+
+                    "number":
+                        r.get("number")
+                        or r.get("phone")
+                        or r.get("mobile")
+                        or r.get("to")
+                        or "",
+
+                    "status":
+                        r.get("status", "unknown"),
+
+                    "files":
+                        r.get("files", [])
+
+                })
+
         # -----------------------------------------------
-        # 🔥 CASE 1: Queue worker ne campaign update bheja
-        # campaign_id aayega → existing campaign update karo
+        # 🔥 CASE 1: Queue worker update
         # -----------------------------------------------
         if campaign_id:
             try:
+
                 campaign = Campaign.objects.get(id=campaign_id)
 
-                success = len([r for r in results if r.get("status") == "sent"])
-                failed  = len([r for r in results if r.get("status") == "failed"])
-                nonwa   = len([r for r in results if r.get("status") == "nonwa"])
+                success = len([
+                    r for r in clean_results
+                    if r.get("status") == "sent"
+                ])
 
-                # Media extract
+                failed = len([
+                    r for r in clean_results
+                    if r.get("status") == "failed"
+                ])
+
+                nonwa = len([
+                    r for r in clean_results
+                    if r.get("status") == "nonwa"
+                ])
+
+                # 🔥 Media extract
                 media = []
-                for r in results:
+
+                for r in clean_results:
+
                     if isinstance(r, dict):
+
                         for f in r.get("files", []):
+
                             if isinstance(f, dict):
-                                media.append({"name": f.get("name"), "type": f.get("type")})
+
+                                media.append({
+                                    "name": f.get("name"),
+                                    "type": f.get("type")
+                                })
 
                 campaign.success = success
                 campaign.failed  = failed
                 campaign.nonwa   = nonwa
                 campaign.media   = media
-                campaign.results = results
-                campaign.status  = "completed"   # 🔥 Mark done
+                campaign.results = clean_results
+                campaign.status  = "completed"
+
                 campaign.save()
 
                 return Response({
@@ -341,83 +394,125 @@ def send_whatsapp(request):
                 })
 
             except Campaign.DoesNotExist:
-                pass  # Nahi mila to neeche fresh create karega
+                pass
 
         # -----------------------------------------------
-        # CREDIT CHECK
-        # Admin ke liye credit check nahi — unlimited
+        # 🔥 CREDIT CHECK
         # -----------------------------------------------
         old_credit = user.credit
 
         if user.role != "admin":
+
             if user.credit < total:
+
                 return Response({
                     "status": "failed",
                     "message": "Insufficient Balance ❌"
                 })
+
             user.credit -= total
             user.save()
 
         # -----------------------------------------------
-        # RESULT CALCULATION
-        # Pending me sab "pending" hoga, completed me actual results
+        # 🔥 RESULT CALCULATION
         # -----------------------------------------------
         if status == "pending":
+
             success = 0
             failed  = 0
             nonwa   = 0
-        else:
-            success = len([r for r in results if r.get("status") == "sent"])
-            failed  = len([r for r in results if r.get("status") == "failed"])
-            nonwa   = len([r for r in results if r.get("status") == "nonwa"])
 
-        # Media extract
-        media = []
-        for r in results:
-            if isinstance(r, dict):
-                for f in r.get("files", []):
-                    if isinstance(f, dict):
-                        media.append({"name": f.get("name"), "type": f.get("type")})
+        else:
+
+            success = len([
+                r for r in clean_results
+                if r.get("status") == "sent"
+            ])
+
+            failed = len([
+                r for r in clean_results
+                if r.get("status") == "failed"
+            ])
+
+            nonwa = len([
+                r for r in clean_results
+                if r.get("status") == "nonwa"
+            ])
 
         # -----------------------------------------------
-        # SAVE CAMPAIGN
+        # 🔥 MEDIA EXTRACT
+        # -----------------------------------------------
+        media = []
+
+        for r in clean_results:
+
+            if isinstance(r, dict):
+
+                for f in r.get("files", []):
+
+                    if isinstance(f, dict):
+
+                        media.append({
+                            "name": f.get("name"),
+                            "type": f.get("type")
+                        })
+
+        # -----------------------------------------------
+        # 🔥 SAVE CAMPAIGN
         # -----------------------------------------------
         campaign = Campaign.objects.create(
+
             user    = user,
             message = message,
+
             total   = total,
+
             success = success,
             failed  = failed,
             nonwa   = nonwa,
+
             media   = media,
-            results = results,
-            status  = status,   # 🔥 "pending" or "completed"
+
+            results = clean_results,
+
+            status  = status,
         )
 
         # -----------------------------------------------
-        # CREDIT LOG (sirf completed ke liye — ya pending first save)
+        # 🔥 CREDIT LOG
         # -----------------------------------------------
         CreditLog.objects.create(
+
             user       = user,
+
             service    = "WHATSAPP",
+
             credit     = total,
+
             type       = "Debit",
+
             old_credit = old_credit,
+
             new_credit = user.credit,
+
             notes      = f"Campaign {'queued' if status == 'pending' else 'sent'}",
-            results    = results,
+
+            results    = clean_results,
         )
 
         return Response({
             "status": "saved",
             "remaining_credit": user.credit,
-            "campaign_id": campaign.id,   # 🔥 Frontend ko return karo — queue update ke liye
+            "campaign_id": campaign.id,
         })
 
     except Exception as e:
-        print("SEND ERROR:", e)
-        return Response({"status": "error"})
 
+        print("SEND ERROR:", e)
+
+        return Response({
+            "status": "error"
+        })
 
 # =========================
 # GET USER

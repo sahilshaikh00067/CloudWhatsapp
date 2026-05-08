@@ -89,22 +89,22 @@ const WappReports = () => {
     }
   };
 
-useEffect(() => {
+  useEffect(() => {
 
-  loadReports();
-
-  const handleRealtimeUpdate = () => {
-    console.log("⚡ Instant report refresh");
     loadReports();
-  };
 
-  window.addEventListener("campaignUpdated", handleRealtimeUpdate);
+    const handleRealtimeUpdate = () => {
+      console.log("⚡ Instant report refresh");
+      loadReports();
+    };
 
-  return () => {
-    window.removeEventListener("campaignUpdated", handleRealtimeUpdate);
-  };
+    window.addEventListener("campaignUpdated", handleRealtimeUpdate);
 
-}, [selectedFilter]);
+    return () => {
+      window.removeEventListener("campaignUpdated", handleRealtimeUpdate);
+    };
+
+  }, [selectedFilter]);
 
   // ===============================
   // 🔥 AUTO-POLL — agar koi campaign pending hai to refresh karo
@@ -134,46 +134,77 @@ useEffect(() => {
     setOpenRow(openRow === index ? null : index);
   };
 
-const handleDownload = (data) => {
+  const handleDownload = (data) => {
 
-  const rows = (data.results || []).map((r, index) => ({
-    "Sr No": index + 1,
-    "Number": r.number || "",
-    "Status": (r.status || "unknown").toUpperCase(),
-  }));
+    const rows = (data.results || []).map((r, index) => ({
 
-  const headers = ["Sr No", "Number", "Status"];
+      "Sr No": index + 1,
 
-  const csvContent = [
-    headers.join(","),
-    ...rows.map((r) =>
-      [
-        r["Sr No"],
-        `"${r["Number"]}"`,
-        `"${r["Status"]}"`
-      ].join(",")
-    )
-  ].join("\n");
+      "Number":
+        r.number ||
+        r.phone ||
+        r.mobile ||
+        r.to ||
+        "",
 
-  const blob = new Blob(
-    [csvContent],
-    { type: "text/csv;charset=utf-8;" }
-  );
+      "Status":
+        (
+          r.status ||
+          "unknown"
+        ).toUpperCase(),
 
-  const url = URL.createObjectURL(blob);
+      "Message":
+        data.message || "",
 
-  const a = document.createElement("a");
+      "Campaign":
+        data.name || "",
 
-  a.href = url;
+      "Date":
+        data.date || "",
 
-  a.download = `${data.name}-report.csv`;
+    }));
 
-  document.body.appendChild(a);
+    const headers = [
+      "Sr No",
+      "Number",
+      "Status",
+      "Message",
+      "Campaign",
+      "Date"
+    ];
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((r) =>
+        [
+          r["Sr No"],
+          `"${r["Number"]}"`,
+          `"${r["Status"]}"`,
+          `"${r["Message"]}"`,
+          `"${r["Campaign"]}"`,
+          `"${r["Date"]}"`
+        ].join(",")
+      )
+    ].join("\n");
 
-  a.click();
+    const blob = new Blob(
+      [csvContent],
+      { type: "text/csv;charset=utf-8;" }
+    );
 
-  document.body.removeChild(a);
-};
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+
+    a.href = url;
+
+    a.download = `${data.name}-report.csv`;
+
+    document.body.appendChild(a);
+
+    a.click();
+
+    document.body.removeChild(a);
+  };
 
   // ===============================
   // PAGINATION
@@ -336,11 +367,10 @@ const handleDownload = (data) => {
                             <button
                               onClick={() => handleDownload(e)}
                               disabled={e.status === "pending"}
-                              className={`px-3 py-1 rounded-b-md text-white ${
-                                e.status === "pending"
+                              className={`px-3 py-1 rounded-b-md text-white ${e.status === "pending"
                                   ? "bg-gray-300 cursor-not-allowed"
                                   : "bg-[#20A8D8] hover:bg-[#1b8db8]"
-                              }`}
+                                }`}
                               title={e.status === "pending" ? "Available after completion" : "Download CSV"}
                             >
                               {e.status === "pending" ? "⏳ Wait" : "Download"}
