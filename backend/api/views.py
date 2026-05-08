@@ -114,68 +114,136 @@ def get_users(request):
 # =========================
 @api_view(['POST'])
 def update_user(request):
+
     try:
-        user = User.objects.get(id=request.data.get("user_id"))
 
-        old_credit = user.credit
-        new_credit = int(request.data.get("credit", old_credit))
-
-        if user.role == "reseller" and not user.parent:
-            user.credit = new_credit
-            user.save()
-
-            CreditLog.objects.create(
-                user=user,
-                service="WHATSAPP",
-                credit=abs(new_credit - old_credit),
-                type="Credit",
-                old_credit=old_credit,
-                new_credit=new_credit,
-                notes="Admin updated reseller credit"
-            )
-
-            return Response({"status": "success", "credit": user.credit})
-
-        if user.parent:
-            parent = user.parent
-            diff = new_credit - old_credit
-
-            if diff > 0:
-                if parent.role != "admin" and parent.credit < diff:
-                    return Response({"status": "failed", "message": "Not enough credit ❌"})
-                if parent.role != "admin":
-                    parent.credit -= diff
-                    parent.save()
-            elif diff < 0:
-                parent.credit += abs(diff)
-                parent.save()
-
-        user.username = str(
-    request.data.get("username", user.username)
-).strip().lower()
-        user.password = str(
-    request.data.get("password", user.password)
-).strip()
-        user.role = request.data.get("role", user.role)
-        user.credit = new_credit
-        user.save()
-
-        CreditLog.objects.create(
-            user=user,
-            service="WHATSAPP",
-            credit=abs(new_credit - old_credit),
-            type="Credit" if new_credit > old_credit else "Debit",
-            old_credit=old_credit,
-            new_credit=new_credit,
-            notes="Manual credit update"
+        user = User.objects.get(
+            id=request.data.get("user_id")
         )
 
-        return Response({"status": "success", "credit": user.credit})
+        old_credit = int(user.credit or 0)
+
+        # ------------------------------------------------
+        # 🔥 USER UPDATE
+        # ------------------------------------------------
+        user.username = str(
+            request.data.get(
+                "username",
+                user.username
+            )
+        ).strip().lower()
+
+        user.password = str(
+            request.data.get(
+                "password",
+                user.password
+            )
+        ).strip()
+
+        user.role = request.data.get(
+            "role",
+            user.role
+        )
+
+        user.status = request.data.get(
+            "status",
+            user.status
+        )
+
+        # ------------------------------------------------
+        # 🔥 CREDIT LOGIC
+        # ------------------------------------------------
+        new_credit = int(
+            request.data.get(
+                "credit",
+                user.credit
+            ) or 0
+        )
+
+        diff = new_credit - old_credit
+
+        # =================================================
+        # 🔥 PARENT CREDIT DEDUCT / RETURN
+        # =================================================
+        if user.parent:
+
+            parent = user.parent
+
+            # ---------------------------------------------
+            # CREDIT ADDING TO CHILD
+            # ---------------------------------------------
+            if diff > 0:
+
+                # parent balance check
+                if parent.role != "admin":
+
+                    if parent.credit < diff:
+
+                        return Response({
+                            "status": "failed",
+                            "message":
+                                "Parent has insufficient balance ❌"
+                        })
+
+                    # 🔥 DEDUCT FROM PARENT
+                    parent.credit -= diff
+
+                parent.save()
+
+            # ---------------------------------------------
+            # CREDIT REMOVING FROM CHILD
+            # ---------------------------------------------
+            elif diff < 0:
+
+                # 🔥 RETURN TO PARENT
+                parent.credit += abs(diff)
+
+                parent.save()
+
+        # ------------------------------------------------
+        # 🔥 SAVE USER CREDIT
+        # ------------------------------------------------
+        user.credit = new_credit
+
+        user.save()
+
+        # ------------------------------------------------
+        # 🔥 CREDIT LOG
+        # ------------------------------------------------
+        if diff != 0:
+
+            CreditLog.objects.create(
+
+                user=user,
+
+                service="WHATSAPP",
+
+                credit=abs(diff),
+
+                type="Credit" if diff > 0 else "Debit",
+
+                old_credit=old_credit,
+
+                new_credit=user.credit,
+
+                notes=(
+                    f"Credit Added by Parent"
+                    if diff > 0
+                    else f"Credit Removed"
+                )
+            )
+
+        return Response({
+            "status": "success"
+        })
 
     except Exception as e:
-        print("UPDATE ERROR:", e)
-        return Response({"status": "error"})
 
+        print("UPDATE USER ERROR:", e)
+
+        return Response({
+            "status": "failed"
+        })
 
 # =========================
 # DELETE USER
