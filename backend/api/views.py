@@ -10,8 +10,12 @@ from concurrent.futures import ThreadPoolExecutor
 @api_view(['POST'])
 def create_user(request):
     try:
-        username = request.data.get("username")
-        password = request.data.get("password")
+        username = str(
+    request.data.get("username", "")
+).strip().lower()
+        username = str(
+    request.data.get("username", "")
+).strip().lower()
         role = request.data.get("role")
         parent_username = request.data.get("parent")
 
@@ -219,16 +223,36 @@ def reset_password(request):
 @api_view(['POST'])
 def login(request):
     try:
+
+        username = str(
+            request.data.get("username", "")
+        ).strip().lower()
+
+        password = str(
+            request.data.get("password", "")
+        ).strip()
+
         user = User.objects.filter(
-            username=request.data.get("username"),
-            password=request.data.get("password")
+            username__iexact=username
         ).first()
 
         if not user:
-            return Response({"status": "failed", "message": "Invalid login"})
+            return Response({
+                "status": "failed",
+                "message": "Invalid username or password ❌"
+            })
+
+        if str(user.password).strip() != password:
+            return Response({
+                "status": "failed",
+                "message": "Invalid username or password ❌"
+            })
 
         if user.status != "Active":
-            return Response({"status": "failed", "message": "Account disabled"})
+            return Response({
+                "status": "failed",
+                "message": "Account disabled ❌"
+            })
 
         return Response({
             "status": "success",
@@ -240,8 +264,10 @@ def login(request):
 
     except Exception as e:
         print("LOGIN ERROR:", e)
-        return Response({"status": "error"})
 
+        return Response({
+            "status": "error"
+        })
 
 # =========================
 # SEND SINGLE (NODE CALL)

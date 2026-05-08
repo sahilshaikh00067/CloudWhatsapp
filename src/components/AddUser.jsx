@@ -56,8 +56,8 @@ const AddUser = () => {
 // 🔥 MUST
 const newUser = {
   id: data.user_id,   // ❗ backend id
-  username: form.username,
-  password: form.password,
+username: form.username.trim().toLowerCase(),
+password: form.password.trim(),
   role: form.role.toLowerCase(),
   parent: currentUser?.username,
   status: "Active",
