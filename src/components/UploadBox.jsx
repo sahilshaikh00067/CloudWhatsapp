@@ -1,30 +1,28 @@
 import React from "react";
 
-const UploadBox = ({ title, type, color, onUpload, files, file }) => {
+const UploadBox = ({ title, type, color, onUpload, files, file, onError }) => {
 
     const handleChange = (e) => {
         const selected = Array.from(e.target.files);
 
         if (type === "image") {
-            if (selected.length + files.length > 4) {
-                alert("Max 4 images allowed");
+            if (selected.length + (files?.length || 0) > 4) {
+                onError("Max 4 images allowed ❌");
                 return;
             }
-
             for (let f of selected) {
                 if (f.size > 1024 * 1024) {
-                    alert("Image max 1MB");
+                    onError(`${f.name} — Image 1MB se badi hai ❌`);
                     return;
                 }
             }
-
-            onUpload([...files, ...selected]);
+            onUpload([...(files || []), ...selected]);
         }
 
         if (type === "video") {
             const f = selected[0];
             if (f && f.size > 3 * 1024 * 1024) {
-                alert("Video max 3MB");
+                onError("Video 3MB se badi hai ❌");
                 return;
             }
             onUpload(f);
@@ -33,7 +31,7 @@ const UploadBox = ({ title, type, color, onUpload, files, file }) => {
         if (type === "pdf") {
             const f = selected[0];
             if (f && f.size > 1024 * 1024) {
-                alert("PDF max 1MB");
+                onError("PDF 1MB se badi hai ❌");
                 return;
             }
             onUpload(f);
@@ -67,19 +65,34 @@ const UploadBox = ({ title, type, color, onUpload, files, file }) => {
                             alt=""
                             className="w-16 h-16 object-cover rounded"
                         />
+                        <button
+                            onClick={() => onUpload(files.filter((_, idx) => idx !== i))}
+                            className="absolute top-0 right-0 bg-red-500 text-white text-xs px-1 rounded"
+                        >✕</button>
                     </div>
                 ))}
 
                 {type === "video" && file && (
-                    <video
-                        src={URL.createObjectURL(file)}
-                        className="w-20 h-20"
-                    />
+                    <div>
+                        <video
+                            src={URL.createObjectURL(file)}
+                            className="w-20 h-20 rounded"
+                            controls
+                        />
+                        <button
+                            onClick={() => onUpload(null)}
+                            className="mt-1 text-red-200 text-xs underline block"
+                        >Remove</button>
+                    </div>
                 )}
 
                 {type === "pdf" && file && (
-                    <div className="bg-white text-black px-2 py-1 text-xs">
-                        {file.name}
+                    <div className="bg-white text-black px-2 py-1 text-xs rounded flex items-center gap-2">
+                        <span>📄 {file.name}</span>
+                        <button
+                            onClick={() => onUpload(null)}
+                            className="text-red-500 font-bold"
+                        >✕</button>
                     </div>
                 )}
 

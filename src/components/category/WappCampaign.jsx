@@ -10,9 +10,9 @@ function Modal({ modal, onClose }) {
 
   const icons = {
     success: { emoji: "🚀", bg: "from-green-500 to-emerald-600", border: "border-green-200", textColor: "text-green-700", bgLight: "bg-green-50" },
-    error:   { emoji: "❌", bg: "from-red-500 to-rose-600",     border: "border-red-200",   textColor: "text-red-700",   bgLight: "bg-red-50" },
+    error: { emoji: "❌", bg: "from-red-500 to-rose-600", border: "border-red-200", textColor: "text-red-700", bgLight: "bg-red-50" },
     warning: { emoji: "⚠️", bg: "from-orange-400 to-orange-500", border: "border-orange-200", textColor: "text-orange-700", bgLight: "bg-orange-50" },
-    info:    { emoji: "⏳", bg: "from-blue-500 to-blue-600",    border: "border-blue-200",  textColor: "text-blue-700",  bgLight: "bg-blue-50" },
+    info: { emoji: "⏳", bg: "from-blue-500 to-blue-600", border: "border-blue-200", textColor: "text-blue-700", bgLight: "bg-blue-50" },
   };
 
   const style = icons[modal.type] || icons.info;
@@ -120,8 +120,8 @@ export default function WappCampaign() {
     const { getRootProps, getInputProps } = useDropzone({
       accept:
         type === "image" ? { "image/*": [] }
-        : type === "video" ? { "video/*": [] }
-        : { "application/pdf": [] },
+          : type === "video" ? { "video/*": [] }
+            : { "application/pdf": [] },
       multiple: type === "image",
       onDrop: (acceptedFiles) => {
         if (!acceptedFiles.length) return;
@@ -319,18 +319,18 @@ export default function WappCampaign() {
       }
 
       const success = Array.isArray(data.results) ? data.results.filter((r) => r.status === "sent").length : 0;
-      const failed  = Array.isArray(data.results) ? data.results.filter((r) => r.status === "failed").length : 0;
-      const nonwa   = Array.isArray(data.results) ? data.results.filter((r) => r.status === "nonwa").length : 0;
+      const failed = Array.isArray(data.results) ? data.results.filter((r) => r.status === "failed").length : 0;
+      const nonwa = Array.isArray(data.results) ? data.results.filter((r) => r.status === "nonwa").length : 0;
 
       showModal("success", "Sent Successfully 🚀",
         `Total:    ${data.total}\nSent:     ${success}\nFailed:   ${failed}\nNon-WA:  ${nonwa}`
       );
 
-resetForm();
+      resetForm();
 
-window.dispatchEvent(new Event("campaignUpdated"));
+      window.dispatchEvent(new Event("campaignUpdated"));
 
-window.dispatchEvent(new Event("creditUpdated"));
+      window.dispatchEvent(new Event("creditUpdated"));
     } catch (err) {
       console.log("ERROR:", err);
       showModal("error", "Unexpected Error ❌", "Something went wrong. Please try again.");
@@ -407,15 +407,33 @@ window.dispatchEvent(new Event("creditUpdated"));
                   className="w-full h-[190px] border border-green-400 rounded px-2 py-2 text-[13px] outline-none resize-none mb-3"
                 />
 
-                <UploadBox title="Image (Max file size 1 MB.) Images (Maximum 4)" type="image" color="bg-[#63C2DE]" />
-
+                <UploadBox
+                  title="Image (Max file size 1 MB.) Images (Maximum 4)"
+                  type="image"
+                  color="bg-[#63C2DE]"
+                  files={images}
+                  onUpload={setImages}
+                  onError={(msg) => showModal("error", "Upload Error ❌", msg)}
+                />
                 <div className="flex gap-3 mt-2">
                   <div className="w-1/2 h-[130px] overflow-hidden">
-                    <UploadBox title="Video Upload (Max file size 3 MB.)" type="video" color="bg-[#4DBD74]" />
-                  </div>
+                    <UploadBox
+                      title="Video Upload (Max file size 3 MB.)"
+                      type="video"
+                      color="bg-[#4DBD74]"
+                      file={video}
+                      onUpload={setVideo}
+                      onError={(msg) => showModal("error", "Upload Error ❌", msg)}
+                    />                  </div>
                   <div className="w-1/2 h-[130px] overflow-hidden">
-                    <UploadBox title="PDF (Max file size 1 MB.)" type="pdf" color="bg-[#F86C6B]" />
-                  </div>
+                    <UploadBox
+                      title="PDF (Max file size 1 MB.)"
+                      type="pdf"
+                      color="bg-[#F86C6B]"
+                      file={pdf}
+                      onUpload={setPdf}
+                      onError={(msg) => showModal("error", "Upload Error ❌", msg)}
+                    />                  </div>
                 </div>
               </div>
             </div>
