@@ -26,7 +26,7 @@ useEffect(() => {
       const user = JSON.parse(sessionStorage.getItem("user"));
 
       const res = await fetch(
-        `https://api.cloudwhatsapp.in/api/get-credit-logs/?user_id=${user.id}`
+        `https://whatsappsms-olho.onrender.com/api/get-credit-logs/?user_id=${user.id}`
       );
 
       const data = await res.json();

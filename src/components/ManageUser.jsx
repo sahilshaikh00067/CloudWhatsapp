@@ -32,7 +32,7 @@ const handleAddCredit = async () => {
   }
 
   try {
-    const res = await fetch("https://api.cloudwhatsapp.in/api/update-user/", {
+    const res = await fetch("https://whatsappsms-olho.onrender.com/api/update-user/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -73,7 +73,7 @@ const loadUsers = async () => {
     const user = JSON.parse(sessionStorage.getItem("user"));
 
     const res = await fetch(
-      `https://api.cloudwhatsapp.in/api/get-users/?user_id=${user?.id}`
+      `https://whatsappsms-olho.onrender.com/api/get-users/?user_id=${user?.id}`
     );
 
     const data = await res.json();
@@ -108,7 +108,7 @@ const loadUsers = async () => {
 const handleDelete = async (id) => {
   if (!window.confirm("Delete this user?")) return;
 
-  await fetch("https://api.cloudwhatsapp.in/api/delete-user/", {
+  await fetch("https://whatsappsms-olho.onrender.com/api/delete-user/", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -126,7 +126,7 @@ const handleDelete = async (id) => {
   };
 
 const handleEditSave = async () => {
-  await fetch("https://api.cloudwhatsapp.in/api/update-user/", {
+  await fetch("https://whatsappsms-olho.onrender.com/api/update-user/", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import * as Yup from "yup";
 import { useNavigate } from "react-router-dom";
 
-const API_URL = "https://api.cloudwhatsapp.in/api/login/";
+const API_URL = "https://whatsappsms-olho.onrender.com/api/login/";
 
 function Login() {
   const navigate = useNavigate();

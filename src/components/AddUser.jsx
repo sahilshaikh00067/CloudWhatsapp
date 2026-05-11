@@ -92,7 +92,7 @@ const AddUser = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch("https://api.cloudwhatsapp.in/api/create-user/", {
+      const res = await fetch("https://whatsappsms-olho.onrender.com/api/create-user/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -124,7 +124,7 @@ const AddUser = () => {
       };
 
 
-
+      
       // ✅ alert ki jagah modal
       setShowSuccess(true);
 

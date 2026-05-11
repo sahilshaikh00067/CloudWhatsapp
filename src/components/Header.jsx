@@ -51,7 +51,7 @@ useEffect(() => {
     try {
 
       const res = await fetch(
-        `https://api.cloudwhatsapp.in/api/get-user/?user_id=${stored.id}`
+        `https://whatsappsms-olho.onrender.com/api/get-user/?user_id=${stored.id}`
       );
 
       const data = await res.json();
