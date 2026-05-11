@@ -32,7 +32,7 @@ const WappReports = () => {
       const userId = user?.id || sessionStorage.getItem("user_id");
 
       const res = await fetch(
-        `https://whatsappsms-olho.onrender.com/api/get-campaigns/?user_id=${userId}`
+        `https://api.cloudwhatsapp.in/api/get-campaigns/?user_id=${userId}`
       );
       const data = await res.json();
 
@@ -134,120 +134,120 @@ const WappReports = () => {
     setOpenRow(openRow === index ? null : index);
   };
 
-  const handleDownload = (data) => {
+const handleDownload = (data) => {
 
-    try {
+  try {
 
-      console.log("DOWNLOAD DATA:", data);
+    console.log("DOWNLOAD DATA:", data);
 
-      const rows = (data.results || []).map((r, index) => {
+    const rows = (data.results || []).map((r, index) => {
 
-        const number =
-          r.number ||
-          r.phone ||
-          r.mobile ||
-          r.to ||
-          "";
+      const number =
+        r.number ||
+        r.phone ||
+        r.mobile ||
+        r.to ||
+        "";
 
-        const status =
-          r.status ||
-          "unknown";
+      const status =
+        r.status ||
+        "unknown";
 
-        return {
+      return {
 
-          "Sr No": index + 1,
+        "Sr No": index + 1,
 
-          "Number": number,
+        "Number": number,
 
-          "Status": status.toUpperCase(),
+        "Status": status.toUpperCase(),
 
-          "Message":
-            data.message || "",
+        "Message":
+          data.message || "",
 
-          "Campaign":
-            data.name ||
-            `Campaign-${data.id || ""}`,
+        "Campaign":
+          data.name ||
+          `Campaign-${data.id || ""}`,
 
-          "Date":
-            data.created_at
-              ? new Date(
+        "Date":
+          data.created_at
+            ? new Date(
                 data.created_at
               ).toLocaleString()
-              : "",
+            : "",
 
-        };
+      };
 
-      });
+    });
 
-      console.log("ROWS:", rows);
+    console.log("ROWS:", rows);
 
-      const headers = [
-        "Sr No",
-        "Number",
-        "Status",
-        "Message",
-        "Campaign",
-        "Date"
-      ];
+    const headers = [
+      "Sr No",
+      "Number",
+      "Status",
+      "Message",
+      "Campaign",
+      "Date"
+    ];
 
-      const csvContent = [
+    const csvContent = [
 
-        headers.join(","),
+      headers.join(","),
 
-        ...rows.map((r) => [
+      ...rows.map((r) => [
 
-          r["Sr No"],
+        r["Sr No"],
 
-          `"${r["Number"]}"`,
+        `"${r["Number"]}"`,
 
-          `"${r["Status"]}"`,
+        `"${r["Status"]}"`,
 
-          `"${r["Message"]}"`,
+        `"${r["Message"]}"`,
 
-          `"${r["Campaign"]}"`,
+        `"${r["Campaign"]}"`,
 
-          `"${r["Date"]}"`
+        `"${r["Date"]}"`
 
-        ].join(","))
+      ].join(","))
 
-      ].join("\n");
+    ].join("\n");
 
-      const blob = new Blob(
-        [csvContent],
-        {
-          type: "text/csv;charset=utf-8;"
-        }
-      );
+    const blob = new Blob(
+      [csvContent],
+      {
+        type: "text/csv;charset=utf-8;"
+      }
+    );
 
-      const url =
-        URL.createObjectURL(blob);
+    const url =
+      URL.createObjectURL(blob);
 
-      const link =
-        document.createElement("a");
+    const link =
+      document.createElement("a");
 
-      link.href = url;
+    link.href = url;
 
-      link.download =
-        `campaign-report-${Date.now()}.csv`;
+    link.download =
+      `campaign-report-${Date.now()}.csv`;
 
-      document.body.appendChild(link);
+    document.body.appendChild(link);
 
-      link.click();
+    link.click();
 
-      document.body.removeChild(link);
+    document.body.removeChild(link);
 
-    } catch (err) {
+  } catch (err) {
 
-      console.log(
-        "DOWNLOAD ERROR:",
-        err
-      );
+    console.log(
+      "DOWNLOAD ERROR:",
+      err
+    );
 
-      alert(
-        "Download failed ❌"
-      );
-    }
-  };
+    alert(
+      "Download failed ❌"
+    );
+  }
+};
 
   // ===============================
   // PAGINATION
@@ -411,8 +411,8 @@ const WappReports = () => {
                               onClick={() => handleDownload(e)}
                               disabled={e.status === "pending"}
                               className={`px-3 py-1 rounded-b-md text-white ${e.status === "pending"
-                                ? "bg-gray-300 cursor-not-allowed"
-                                : "bg-[#20A8D8] hover:bg-[#1b8db8]"
+                                  ? "bg-gray-300 cursor-not-allowed"
+                                  : "bg-[#20A8D8] hover:bg-[#1b8db8]"
                                 }`}
                               title={e.status === "pending" ? "Available after completion" : "Download CSV"}
                             >
@@ -451,58 +451,44 @@ const WappReports = () => {
 
                                     {/* IMAGES */}
                                     <div className="flex gap-2 flex-wrap">
-                                      {[
-                                        ...new Map(
-                                          (e.media || [])
-                                            .filter((f) => f?.type?.includes("image"))
-                                            .map((item) => [item.name, item])
-                                        ).values(),
-                                      ].map((img, idx) => (
-                                        <img
-                                          key={idx}
-                                          src={`https://wa.cloudwhatsapp.in/uploads/${img.name}`}
-                                          className="w-20 h-20 object-cover border"
-                                          alt="img"
-                                        />
-                                      ))}
+                                      {(e.media || [])
+                                        .filter((f) => f?.type?.includes("image"))
+                                        .map((img, idx) => (
+                                          <img
+                                            key={idx}
+                                            src={`https://wa.cloudwhatsapp.in/uploads/${img.name}`}
+                                            className="w-20 h-20 object-cover border"
+                                            alt="img"
+                                          />
+                                        ))}
                                     </div>
 
                                     {/* VIDEO */}
                                     <div className="flex gap-2 mt-2">
-                                      {[
-                                        ...new Map(
-                                          (e.media || [])
-                                            .filter((f) => f?.type?.includes("video"))
-                                            .map((item) => [item.name, item])
-                                        ).values(),
-                                      ].map((vid, idx) => (
-                                        <video key={idx} controls className="w-32">
-                                          <source
-                                            src={`https://wa.cloudwhatsapp.in/uploads/${vid.name}`}
-                                          />
-                                        </video>
-                                      ))}
+                                      {(e.media || [])
+                                        .filter((f) => f?.type?.includes("video"))
+                                        .map((vid, idx) => (
+                                          <video key={idx} controls className="w-32">
+                                            <source src={`https://wa.cloudwhatsapp.in/uploads/${vid.name}`} />
+                                          </video>
+                                        ))}
                                     </div>
 
                                     {/* PDF */}
                                     <div className="flex gap-2 mt-2">
-                                      {[
-                                        ...new Map(
-                                          (e.media || [])
-                                            .filter((f) => f?.type?.includes("pdf"))
-                                            .map((item) => [item.name, item])
-                                        ).values(),
-                                      ].map((pdf, idx) => (
-                                        <a
-                                          key={idx}
-                                          href={`https://wa.cloudwhatsapp.in/uploads/${pdf.name}`}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="bg-white border px-2 py-1"
-                                        >
-                                          📄 {pdf.name}
-                                        </a>
-                                      ))}
+                                      {(e.media || [])
+                                        .filter((f) => f?.type?.includes("pdf"))
+                                        .map((pdf, idx) => (
+                                          <a
+                                            key={idx}
+                                            href={`https://wa.cloudwhatsapp.in/uploads/${pdf.name}`}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="bg-white border px-2 py-1"
+                                          >
+                                            📄 {pdf.name}
+                                          </a>
+                                        ))}
                                     </div>
                                   </>
                                 )}
