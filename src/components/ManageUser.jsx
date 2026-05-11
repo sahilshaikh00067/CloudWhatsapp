@@ -32,7 +32,7 @@ const handleAddCredit = async () => {
   }
 
   try {
-    const res = await fetch("http://206.81.10.143:8000/api/update-user/", {
+    const res = await fetch("https://api.cloudwhatsapp.in/api/update-user/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -73,7 +73,7 @@ const loadUsers = async () => {
     const user = JSON.parse(sessionStorage.getItem("user"));
 
     const res = await fetch(
-      `http://206.81.10.143:8000/api/get-users/?user_id=${user?.id}`
+      `https://api.cloudwhatsapp.in/api/get-users/?user_id=${user?.id}`
     );
 
     const data = await res.json();
@@ -108,7 +108,7 @@ const loadUsers = async () => {
 const handleDelete = async (id) => {
   if (!window.confirm("Delete this user?")) return;
 
-  await fetch("http://206.81.10.143:8000/api/delete-user/", {
+  await fetch("https://api.cloudwhatsapp.in/api/delete-user/", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -126,7 +126,7 @@ const handleDelete = async (id) => {
   };
 
 const handleEditSave = async () => {
-  await fetch("http://206.81.10.143:8000/api/update-user/", {
+  await fetch("https://api.cloudwhatsapp.in/api/update-user/", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

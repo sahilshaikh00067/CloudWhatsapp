@@ -51,7 +51,7 @@ useEffect(() => {
     try {
 
       const res = await fetch(
-        `http://206.81.10.143:8000/api/get-user/?user_id=${stored.id}`
+        `https://api.cloudwhatsapp.in/api/get-user/?user_id=${stored.id}`
       );
 
       const data = await res.json();

@@ -92,7 +92,7 @@ const AddUser = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch("http://206.81.10.143:8000/api/create-user/", {
+      const res = await fetch("https://api.cloudwhatsapp.in/api/create-user/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

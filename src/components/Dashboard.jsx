@@ -76,7 +76,7 @@ const Dashboard = () => {
   const loadReports = async () => {
 const userId = sessionStorage.getItem("user_id");
 
-const res = await fetch(`http://206.81.10.143:8000/api/get-campaigns/?user_id=${userId}`);
+const res = await fetch(`https://api.cloudwhatsapp.in/api/get-campaigns/?user_id=${userId}`);
   const data = await res.json();
 
   const now = new Date();
@@ -102,7 +102,7 @@ useEffect(() => {
       const userId = sessionStorage.getItem("user_id");
 
       const res = await fetch(
-        `http://206.81.10.143:8000/api/get-campaigns/?user_id=${userId}`
+        `https://api.cloudwhatsapp.in/api/get-campaigns/?user_id=${userId}`
       );
 
       const reports = await res.json();
