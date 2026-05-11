@@ -14,21 +14,21 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use("/uploads", express.static("uploads"));
 
 // ── CONFIG ────────────────────────────────────
-const PORT       = process.env.PORT       || 5000;
+const PORT = process.env.PORT || 5000;
 const MAX_DEVICES = parseInt(process.env.MAX_DEVICES || "100");
-const NODE_ID    = process.env.NODE_ID    || "node1";
+const NODE_ID = process.env.NODE_ID || "node1";
 
 // ── STORAGE ───────────────────────────────────
-const clients       = {};
-const qrCodes       = {};
-const readyMap      = {};
-const infoMap       = {};
+const clients = {};
+const qrCodes = {};
+const readyMap = {};
+const infoMap = {};
 const retryCountMap = {};
-const sendStats     = {};
+const sendStats = {};
 
 // ── QUEUE ─────────────────────────────────────
 const pendingQueue = [];
-let queueRunning   = false;
+let queueRunning = false;
 
 // ── FILE UPLOAD ───────────────────────────────
 ["uploads", "sessions"].forEach((d) => !fs.existsSync(d) && fs.mkdirSync(d));
@@ -36,14 +36,14 @@ let queueRunning   = false;
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_, __, cb) => cb(null, "uploads/"),
-    filename:    (_, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
+    filename: (_, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
   }),
   limits: { fileSize: 3 * 1024 * 1024 }, // 3MB max
 });
 
 // ── HELPERS ───────────────────────────────────
-const sleep  = (ms)       => new Promise((r) => setTimeout(r, ms));
-const jitter = (base, v)  => base + Math.random() * v;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const jitter = (base, v) => base + Math.random() * v;
 
 function normalizeNumber(number) {
   let num = number.trim().replace(/\D/g, "");
@@ -66,7 +66,7 @@ function log(msg) {
 }
 
 // ── FILE CACHE ────────────────────────────────
-const fileCache     = new Map();
+const fileCache = new Map();
 const FILE_CACHE_MAX = 30;
 
 async function getFileBase64(filePath) {
@@ -87,7 +87,7 @@ setInterval(() => {
       const fp = path.join("./uploads", file);
       if (now - fs.statSync(fp).mtimeMs > 6 * 3600000) fs.unlinkSync(fp);
     });
-  } catch {}
+  } catch { }
 }, 3600000);
 
 // ── MIME HELPERS ──────────────────────────────
@@ -103,11 +103,11 @@ const DOC_MIMES = new Set([
 const isDocument = (mime) => DOC_MIMES.has(mime);
 
 // ── RATE LIMITER ──────────────────────────────
-const RATE_LIMIT  = 25; // per device per minute — safe + fast
+const RATE_LIMIT = 8; // per device per minute — safe + fast
 const RATE_WINDOW = 60000;
 
 function canSend(deviceId) {
-  const now  = Date.now();
+  const now = Date.now();
   if (!sendStats[deviceId]) sendStats[deviceId] = { count: 0, windowStart: now };
   const stat = sendStats[deviceId];
   if (now - stat.windowStart > RATE_WINDOW) {
@@ -164,12 +164,12 @@ async function createDevice(deviceId) {
       protocolTimeout: 90000,
     },
     takeoverOnConflict: true,
-    takeoverTimeoutMs:  5000,
-    restartOnAuthFail:  true,
+    takeoverTimeoutMs: 5000,
+    restartOnAuthFail: true,
   });
 
-  clients[deviceId]   = client;
-  readyMap[deviceId]  = false;
+  clients[deviceId] = client;
+  readyMap[deviceId] = false;
 
   client.on("qr", async (qr) => {
     try {
@@ -178,24 +178,24 @@ async function createDevice(deviceId) {
       });
       readyMap[deviceId] = false;
       log(`📲 QR ready: ${deviceId}`);
-    } catch {}
+    } catch { }
   });
 
   client.on("authenticated", () => {
-    qrCodes[deviceId]       = "";
+    qrCodes[deviceId] = "";
     retryCountMap[deviceId] = 0;
     log(`🔐 Authenticated: ${deviceId}`);
   });
 
   client.on("ready", async () => {
-    readyMap[deviceId]      = true;
+    readyMap[deviceId] = true;
     retryCountMap[deviceId] = 0;
     const info = client.info;
     infoMap[deviceId] = {
-      wid:         info?.wid,
-      pushname:    info?.pushname,
+      wid: info?.wid,
+      pushname: info?.pushname,
       connectedAt: new Date().toISOString(),
-      node:        NODE_ID,
+      node: NODE_ID,
     };
     log(`✅ Ready: ${deviceId} → ${info?.wid?.user} | RAM: ${getMemoryUsageMB()}MB`);
   });
@@ -217,7 +217,7 @@ async function createDevice(deviceId) {
       return;
     }
 
-    try { await client.destroy(); } catch {}
+    try { await client.destroy(); } catch { }
     delete clients[deviceId];
     delete infoMap[deviceId];
 
@@ -248,14 +248,24 @@ async function sendToNumber(client, deviceId, number, message, files) {
   }
 
   // isRegisteredUser — timeout ke saath (3s max)
-  let isRegistered = false;
+  let isRegistered = true;
+
   try {
+
     isRegistered = await Promise.race([
+
       client.isRegisteredUser(chatId),
-      sleep(3000).then(() => false), // 3s baad false return karo, throw mat karo
+
+      new Promise((resolve) =>
+        setTimeout(() => resolve(true), 10000)
+      )
+
     ]);
+
   } catch {
-    isRegistered = false;
+
+    isRegistered = true;
+
   }
 
   if (!isRegistered) return { number, status: "nonwa" };
@@ -271,10 +281,10 @@ async function sendToNumber(client, deviceId, number, message, files) {
       if (message?.trim()) await sleep(300);
 
       for (let i = 0; i < files.length; i++) {
-        const file     = files[i];
+        const file = files[i];
         const fileData = await getFileBase64(file.path);
-        const mime     = file.mimetype || "application/octet-stream";
-        const media    = new MessageMedia(mime, fileData, file.originalname);
+        const mime = file.mimetype || "application/octet-stream";
+        const media = new MessageMedia(mime, fileData, file.originalname);
 
         await client.sendMessage(chatId, media, {
           sendMediaAsDocument: isDocument(mime),
@@ -289,9 +299,7 @@ async function sendToNumber(client, deviceId, number, message, files) {
   } catch (err) {
     const msg = err.message || "";
     if (
-      msg.includes("not a user") ||
-      msg.includes("invalid wid") ||
-      msg.includes("not registered")
+      msg.toLowerCase().includes("invalid wid")
     ) {
       return { number, status: "nonwa" };
     }
@@ -313,7 +321,7 @@ async function processQueue() {
     const job = pendingQueue[0];
     if (job.status === "cancelled") { pendingQueue.shift(); continue; }
 
-    job.status    = "running";
+    job.status = "running";
     job.startedAt = new Date().toISOString();
 
     const deviceIds = getReadyDeviceIds();
@@ -328,11 +336,11 @@ async function processQueue() {
     const { numbers, message, files } = job;
 
     // 🔥 Batch size badhaya — 10 per device (pehle 8 tha)
-    const BATCH_SIZE = Math.min(10 * deviceIds.length, 80);
+    const BATCH_SIZE = Math.min(2 * deviceIds.length, 5);
     log(`🚀 Job ${job.id}: ${numbers.length} numbers | ${deviceIds.length} devices | batch ${BATCH_SIZE}`);
 
     for (let i = 0; i < numbers.length; i += BATCH_SIZE) {
-      const batch         = numbers.slice(i, i + BATCH_SIZE);
+      const batch = numbers.slice(i, i + BATCH_SIZE);
       const activeDevices = getReadyDeviceIds();
 
       if (!activeDevices.length) {
@@ -345,7 +353,7 @@ async function processQueue() {
       const batchResults = await Promise.allSettled(
         batch.map(async (number, idx) => {
           const deviceId = activeDevices[idx % activeDevices.length];
-          const client   = clients[deviceId];
+          const client = clients[deviceId];
           if (!client || !readyMap[deviceId]) return { number, status: "failed" };
           try {
             return {
@@ -364,7 +372,7 @@ async function processQueue() {
 
       job.progress = results.length;
 
-      const sent  = results.filter((r) => r.status === "sent").length;
+      const sent = results.filter((r) => r.status === "sent").length;
       const nonwa = results.filter((r) => r.status === "nonwa").length;
       const failed = results.filter((r) => r.status === "failed").length;
 
@@ -372,12 +380,12 @@ async function processQueue() {
 
       // 🔥 Batch delay kam kiya — 2000ms → 800ms
       if (i + BATCH_SIZE < numbers.length) {
-        await sleep(jitter(800, 300));
+        await sleep(jitter(4000, 1500));
       }
     }
 
-    job.status      = "completed";
-    job.results     = results;
+    job.status = "completed";
+    job.results = results;
     job.completedAt = new Date().toISOString();
 
     const sent = results.filter((r) => r.status === "sent").length;
@@ -391,15 +399,15 @@ async function processQueue() {
           type: f.mimetype,
         }));
         await fetch("https://cloudwhatsapp-1.onrender.com/api/send-whatsapp/", {
-          method:  "POST",
+          method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            results:     results.map((r) => ({ ...r, files: filesData })),
-            message:     job.message,
-            total:       job.numbers.length,
-            user_id:     job.userId,
+            results: results.map((r) => ({ ...r, files: filesData })),
+            message: job.message,
+            total: job.numbers.length,
+            user_id: job.userId,
             campaign_id: job.campaignId,
-            status:      "completed",
+            status: "completed",
           }),
         });
         log(`📤 Django notified: campaign ${job.campaignId}`);
@@ -426,15 +434,15 @@ async function processQueue() {
 
 app.get("/health", (req, res) => {
   res.json({
-    status:         "ok",
-    node:           NODE_ID,
-    uptime:         Math.round(process.uptime()),
-    memory_mb:      getMemoryUsageMB(),
-    total_devices:  Object.keys(clients).length,
-    ready_devices:  getReadyDeviceIds().length,
-    max_devices:    MAX_DEVICES,
-    queue_jobs:     pendingQueue.length,
-    queue_running:  queueRunning,
+    status: "ok",
+    node: NODE_ID,
+    uptime: Math.round(process.uptime()),
+    memory_mb: getMemoryUsageMB(),
+    total_devices: Object.keys(clients).length,
+    ready_devices: getReadyDeviceIds().length,
+    max_devices: MAX_DEVICES,
+    queue_jobs: pendingQueue.length,
+    queue_running: queueRunning,
     os_free_mem_mb: Math.round(os.freemem() / 1024 / 1024),
   });
 });
@@ -453,8 +461,8 @@ app.get("/get-qr", (req, res) => {
   const { deviceId } = req.query;
   if (!deviceId) return res.json({ status: "failed" });
   res.json({
-    qr:     qrCodes[deviceId] || "",
-    ready:  readyMap[deviceId] || false,
+    qr: qrCodes[deviceId] || "",
+    ready: readyMap[deviceId] || false,
     exists: !!clients[deviceId],
   });
 });
@@ -464,28 +472,28 @@ app.get("/get-device", (req, res) => {
   const info = infoMap[deviceId];
   if (!info) return res.json({ status: "not_ready", ready: false });
   res.json({
-    number:      info.wid?.user || "",
-    name:        info.pushname  || "",
-    ready:       readyMap[deviceId] || false,
+    number: info.wid?.user || "",
+    name: info.pushname || "",
+    ready: readyMap[deviceId] || false,
     connectedAt: info.connectedAt,
-    node:        info.node,
+    node: info.node,
   });
 });
 
 app.get("/list-devices", (req, res) => {
   const deviceList = Object.keys(clients).map((id) => ({
-    deviceId:    id,
-    ready:       readyMap[id] || false,
-    number:      infoMap[id]?.wid?.user || "",
-    name:        infoMap[id]?.pushname  || "",
+    deviceId: id,
+    ready: readyMap[id] || false,
+    number: infoMap[id]?.wid?.user || "",
+    name: infoMap[id]?.pushname || "",
     connectedAt: infoMap[id]?.connectedAt || null,
-    node:        NODE_ID,
+    node: NODE_ID,
   }));
   res.json({
     devices: deviceList,
-    total:   deviceList.length,
-    ready:   deviceList.filter((d) => d.ready).length,
-    node:    NODE_ID,
+    total: deviceList.length,
+    ready: deviceList.filter((d) => d.ready).length,
+    node: NODE_ID,
   });
 });
 
@@ -493,9 +501,9 @@ app.get("/delete-device", async (req, res) => {
   const { deviceId } = req.query;
   const client = clients[deviceId];
   if (!client) return res.json({ status: "not_found" });
-  try { await client.destroy(); } catch {}
-  delete clients[deviceId];    delete readyMap[deviceId];
-  delete infoMap[deviceId];    delete qrCodes[deviceId];
+  try { await client.destroy(); } catch { }
+  delete clients[deviceId]; delete readyMap[deviceId];
+  delete infoMap[deviceId]; delete qrCodes[deviceId];
   delete retryCountMap[deviceId]; delete sendStats[deviceId];
   const sp = `./sessions/.wwebjs_auth/session-${deviceId}`;
   if (fs.existsSync(sp)) fs.rmSync(sp, { recursive: true, force: true });
@@ -506,10 +514,10 @@ app.get("/logout", async (req, res) => {
   const { deviceId } = req.query;
   const client = clients[deviceId];
   if (!client) return res.json({ status: "not_found" });
-  try { await client.logout();  } catch {}
-  try { await client.destroy(); } catch {}
-  delete clients[deviceId];    delete readyMap[deviceId];
-  delete infoMap[deviceId];    delete qrCodes[deviceId];
+  try { await client.logout(); } catch { }
+  try { await client.destroy(); } catch { }
+  delete clients[deviceId]; delete readyMap[deviceId];
+  delete infoMap[deviceId]; delete qrCodes[deviceId];
   delete retryCountMap[deviceId]; delete sendStats[deviceId];
   const sp = `./sessions/.wwebjs_auth/session-${deviceId}`;
   if (fs.existsSync(sp)) fs.rmSync(sp, { recursive: true, force: true });
@@ -518,20 +526,20 @@ app.get("/logout", async (req, res) => {
 
 app.get("/queue-status", (req, res) => {
   res.json({
-    total:   pendingQueue.length,
+    total: pendingQueue.length,
     running: queueRunning,
-    node:    NODE_ID,
+    node: NODE_ID,
     jobs: pendingQueue.map((j) => ({
-      id:         j.id,
+      id: j.id,
       campaignId: j.campaignId,
-      status:     j.status,
-      total:      j.numbers.length,
-      progress:   j.progress || 0,
-      sent:       (j.results || []).filter((r) => r.status === "sent").length,
-      nonwa:      (j.results || []).filter((r) => r.status === "nonwa").length,
-      failed:     (j.results || []).filter((r) => r.status === "failed").length,
-      createdAt:  j.createdAt,
-      startedAt:  j.startedAt || null,
+      status: j.status,
+      total: j.numbers.length,
+      progress: j.progress || 0,
+      sent: (j.results || []).filter((r) => r.status === "sent").length,
+      nonwa: (j.results || []).filter((r) => r.status === "nonwa").length,
+      failed: (j.results || []).filter((r) => r.status === "failed").length,
+      createdAt: j.createdAt,
+      startedAt: j.startedAt || null,
     })),
   });
 });
@@ -548,10 +556,10 @@ app.get("/cancel-job", (req, res) => {
 // ── SEND BULK ─────────────────────────────────
 app.post("/send-bulk", upload.any(), async (req, res) => {
   let numbers = req.body.numbers || [];
-  const message    = req.body.message    || "";
-  const userId     = req.body.userId     || null;
-  const files      = req.files           || [];
-  const userRole   = (req.body.userRole  || "user").toLowerCase();
+  const message = req.body.message || "";
+  const userId = req.body.userId || null;
+  const files = req.files || [];
+  const userRole = (req.body.userRole || "user").toLowerCase();
   const campaignId = req.body.campaignId || null;
 
   if (!Array.isArray(numbers)) numbers = [numbers];
@@ -568,7 +576,7 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
   if (!deviceIds.length)
     return res.json({ status: "no_device", message: "No WhatsApp device connected" });
 
-  const isAdmin     = userRole === "admin";
+  const isAdmin = userRole === "admin";
   const shouldQueue = numbers.length > 10; // queue threshold
 
   if (shouldQueue) {
@@ -580,9 +588,9 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
     pendingQueue.push(job);
     processQueue();
     return res.json({
-      status:  "queued",
-      jobId:   job.id,
-      total:   numbers.length,
+      status: "queued",
+      jobId: job.id,
+      total: numbers.length,
       message: `Queued. ${numbers.length} numbers.`,
       results: numbers.map((n) => ({ number: n, status: "pending" })),
     });
@@ -593,7 +601,7 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
     await Promise.allSettled(
       numbers.map(async (number, index) => {
         const deviceId = deviceIds[index % deviceIds.length];
-        const client   = clients[deviceId];
+        const client = clients[deviceId];
         if (!client || !readyMap[deviceId]) return { number, status: "failed" };
         try {
           return {
@@ -609,10 +617,10 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
 
   res.json({
     status: "done",
-    total:  numbers.length,
-    sent:   finalResults.filter((r) => r.status === "sent").length,
+    total: numbers.length,
+    sent: finalResults.filter((r) => r.status === "sent").length,
     failed: finalResults.filter((r) => r.status === "failed").length,
-    nonwa:  finalResults.filter((r) => r.status === "nonwa").length,
+    nonwa: finalResults.filter((r) => r.status === "nonwa").length,
     results: finalResults,
   });
 });
@@ -634,14 +642,14 @@ async function restoreSessions() {
 async function gracefulShutdown(signal) {
   log(`🛑 ${signal} — shutting down ${NODE_ID}...`);
   for (const deviceId of Object.keys(clients)) {
-    try { await clients[deviceId].destroy(); } catch {}
+    try { await clients[deviceId].destroy(); } catch { }
   }
   process.exit(0);
 }
 
-process.on("SIGINT",             () => gracefulShutdown("SIGINT"));
-process.on("SIGTERM",            () => gracefulShutdown("SIGTERM"));
-process.on("uncaughtException",  (err)    => log(`💥 ${err.message}`));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("uncaughtException", (err) => log(`💥 ${err.message}`));
 process.on("unhandledRejection", (reason) => log(`💥 ${reason}`));
 
 // ── START ─────────────────────────────────────

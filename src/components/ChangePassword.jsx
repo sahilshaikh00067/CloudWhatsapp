@@ -22,7 +22,6 @@ const ChangePassword = () => {
       return;
     }
 
-    const users = JSON.parse(localStorage.getItem("users")) || [];
 
     const userIndex = users.findIndex(
       (u) => u.username === currentUser.username
@@ -52,8 +51,6 @@ const ChangePassword = () => {
 
     // ✅ UPDATE PASSWORD
     users[userIndex].password = form.newPassword;
-
-    localStorage.setItem("users", JSON.stringify(users));
 
     // ✅ UPDATE SESSION ALSO
     sessionStorage.setItem(

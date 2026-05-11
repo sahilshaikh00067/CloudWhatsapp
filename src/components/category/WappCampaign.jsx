@@ -209,7 +209,7 @@ export default function WappCampaign() {
       let campaignId = null;
 
       if (isLarge) {
-        const pendingSave = await fetch("https://whatsappsms-olho.onrender.com/api/send-whatsapp/", {
+        const pendingSave = await fetch("http://206.81.10.143:8000/api/send-whatsapp/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -289,7 +289,7 @@ export default function WappCampaign() {
 
       const updatedResults = (data.results || []).map((r) => ({ ...r, files: filesData }));
 
-      const saveRes = await fetch("https://whatsappsms-olho.onrender.com/api/send-whatsapp/", {
+      const saveRes = await fetch("http://206.81.10.143:8000/api/send-whatsapp/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
