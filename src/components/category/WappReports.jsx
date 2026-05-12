@@ -39,8 +39,7 @@ const WappReports = () => {
       const now = new Date();
 
       const filtered = data.filter((r) => {
-        const d = new Date(r.created_at);
-        d.setMinutes(d.getMinutes() + d.getTimezoneOffset());
+const d = new Date(r.created_at);
 
         if (selectedFilter === "Today") return d.toDateString() === now.toDateString();
         if (selectedFilter === "Yesterday") {
@@ -309,6 +308,8 @@ const handleDownload = (data) => {
                   <Calendar size={16} />
                   {selectedFilter}
                 </div>
+
+                
 
                 {filterOpen && (
                   <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-300 rounded shadow z-50">
