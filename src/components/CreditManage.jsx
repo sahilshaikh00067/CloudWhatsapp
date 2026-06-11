@@ -1,151 +1,102 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef, memo } from "react";
+import Modal from "./Modal";
 
-// ── MODAL COMPONENT ───────────────────────────
-function Modal({ modal, onClose }) {
-  if (!modal) return null;
+const API = "https://whatsappsms-olho.onrender.com";
 
-  const styles = {
-    success: { bg: "#EAF3DE", border: "3px solid #97C459", icon: "ti-check", iconColor: "#3B6D11", btnBg: "#3B6D11", btnHover: "#27500A", btnColor: "#EAF3DE" },
-    error:   { bg: "#FCEBEB", border: "3px solid #F09595", icon: "ti-x",     iconColor: "#A32D2D", btnBg: "#A32D2D", btnHover: "#791F1F", btnColor: "#FCEBEB" },
-    warning: { bg: "#FAEEDA", border: "3px solid #EF9F27", icon: "ti-alert-triangle", iconColor: "#854F0B", btnBg: "#854F0B", btnHover: "#633806", btnColor: "#FAEEDA" },
-  };
-
-  const s = styles[modal.type] || styles.error;
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 999,
-      background: "rgba(0,0,0,0.5)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      animation: "fadeIn 0.2s ease",
-    }}>
-      <div style={{
-        background: "#fff", borderRadius: 20,
-        width: 320, padding: "32px 24px 24px",
-        textAlign: "center",
-        animation: "popIn 0.4s cubic-bezier(.34,1.56,.64,1) both",
-        boxShadow: "0 20px 60px rgba(0,0,0,0.15)",
-      }}>
-        <div style={{
-          width: 68, height: 68, borderRadius: "50%",
-          background: s.bg, border: s.border,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          margin: "0 auto 16px",
-          animation: "spinIn 0.5s cubic-bezier(.34,1.56,.64,1) 0.1s both",
-        }}>
-          <i className={`ti ${s.icon}`} style={{ fontSize: 32, color: s.iconColor }} />
-        </div>
-
-        <h2 style={{ fontSize: 18, fontWeight: 500, color: "#1f2937", margin: "0 0 8px" }}>
-          {modal.title}
-        </h2>
-        {modal.body && (
-          <p style={{ fontSize: 14, color: "#6b7280", margin: "0 0 20px" }}>
-            {modal.body}
-          </p>
-        )}
-
-        <button
-          onClick={onClose}
-          style={{
-            background: s.btnBg, color: s.btnColor,
-            border: "none", padding: "10px 32px",
-            borderRadius: 8, fontSize: 14, fontWeight: 500,
-            cursor: "pointer", transition: "background 0.2s, transform 0.15s",
-          }}
-          onMouseOver={(e) => { e.target.style.background = s.btnHover; e.target.style.transform = "scale(1.04)"; }}
-          onMouseOut={(e) => { e.target.style.background = s.btnBg; e.target.style.transform = "scale(1)"; }}
-        >
-          OK
-        </button>
-      </div>
-
-      <style>{`
-        @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-        @keyframes popIn { from { transform: scale(0.7); opacity: 0 } to { transform: scale(1); opacity: 1 } }
-        @keyframes spinIn { from { transform: rotate(-90deg) scale(0.5); opacity: 0 } to { transform: rotate(0) scale(1); opacity: 1 } }
-      `}</style>
-    </div>
-  );
+function getUser() {
+  try { return JSON.parse(sessionStorage.getItem("user") || "{}"); } catch { return {}; }
 }
 
-// ── MAIN COMPONENT ────────────────────────────
-const CreditManage = () => {
-  const [users, setUsers]               = useState([]);
-  const [selectedUser, setSelectedUser] = useState("");
-  const [service, setService]           = useState("WHATSAPP");
-  const [credit, setCredit]             = useState("");
-  const [notes, setNotes]               = useState("");
-  const [searchUser, setSearchUser]     = useState("");
+// ─────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────
+export default function CreditManage() {
+  const [users,        setUsers]        = useState([]);
+  const [selectedUser, setSelectedUser] = useState(null);   // full user object
+  const [searchUser,   setSearchUser]   = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
-  const [modal, setModal]               = useState(null); // ← new
+  const [service,      setService]      = useState("WHATSAPP");
+  const [credit,       setCredit]       = useState("");
+  const [notes,        setNotes]        = useState("");
+  const [loading,      setLoading]      = useState(false);
+  const [modal,        setModal]        = useState(null);
 
-  const showModal = (type, title, body = "") => setModal({ type, title, body });
+  const dropRef = useRef(null);
+  const loggedUser = getUser();
 
-  const filteredUsers = users.filter((u) =>
-    u.username.toLowerCase().includes(searchUser.toLowerCase())
-  );
+  const showModal = useCallback((type, title, body = "") => setModal({ type, title, body }), []);
 
-  const loggedUser = JSON.parse(sessionStorage.getItem("user"));
+  // Close dropdown on outside click
+  useEffect(() => {
+    const h = (e) => { if (dropRef.current && !dropRef.current.contains(e.target)) setShowDropdown(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
 
-  const loadUsers = async () => {
+  // ── Load users ──
+  const loadUsers = useCallback(async () => {
     try {
-      const res  = await fetch(`https://whatsappsms-olho.onrender.com/api/get-users/?user_id=${loggedUser?.id}`);
+      const res  = await fetch(`${API}/api/get-users/?user_id=${loggedUser.id}`);
       const data = await res.json();
       setUsers(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.log(err);
+      console.error("LOAD USERS ERROR:", err);
     }
-  };
+  }, [loggedUser.id]);
 
-  useEffect(() => { loadUsers(); }, []);
+  useEffect(() => { loadUsers(); }, [loadUsers]);
 
-  const handleSubmit = async () => {
-    if (!selectedUser || !credit) {
-      showModal("warning", "Fields Required ⚠️", "Please select a user and enter credit amount.");
+  // ── Filtered dropdown list ──
+  const dropdownUsers = users.filter(u =>
+    u.username?.toLowerCase().includes(searchUser.toLowerCase())
+  );
+
+  // ── Submit ──
+  const handleSubmit = useCallback(async () => {
+    if (!selectedUser) {
+      showModal("warning", "Select User ⚠️", "Please select a user from the dropdown.");
+      return;
+    }
+    const amt = Number(credit);
+    if (!amt || amt <= 0) {
+      showModal("warning", "Invalid Amount ⚠️", "Please enter a valid credit amount greater than 0.");
       return;
     }
 
-    const user = users.find((u) => u.id == selectedUser);
-
+    setLoading(true);
     try {
-      const res = await fetch("https://whatsappsms-olho.onrender.com/api/update-user/", {
-        method: "POST",
+      const res  = await fetch(`${API}/api/update-user/`, {
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: user.id,
-          credit: Number(user.credit || 0) + Number(credit),
+        body:    JSON.stringify({
+          user_id: selectedUser.id,
+          credit:  Number(selectedUser.credit || 0) + amt,
         }),
       });
-
       const data = await res.json();
 
       if (data.status === "failed") {
-        showModal("error", "Error ❌", data.message || "Something went wrong.");
+        showModal("error", "Failed ❌", data.message || "Could not add credit.");
+        setLoading(false);
         return;
       }
 
-      showModal("success", "Credit Added ✅", `${credit} credits added to "${user.username}" successfully.`);
-
-      setCredit("");
-      setNotes("");
-      setSelectedUser("");
-      setSearchUser("");
+      showModal("success", "Credit Added ✅", `${amt} credits added to "${selectedUser.username}" successfully.`);
+      setCredit(""); setNotes(""); setSelectedUser(null); setSearchUser("");
       loadUsers();
 
     } catch (err) {
-      console.log(err);
-      showModal("error", "Network Error ❌", "Could not connect to server. Please try again.");
+      console.error("CREDIT ADD ERROR:", err);
+      showModal("error", "Network Error ❌", "Could not connect to server.");
     }
-  };
+    setLoading(false);
+  }, [selectedUser, credit, loadUsers, showModal]);
 
   return (
     <div className="min-h-screen bg-[#f1f1f1]">
 
-      {/* MODAL */}
       <Modal modal={modal} onClose={() => setModal(null)} />
 
-      {/* NOTE */}
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[18px]">
           NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday)
@@ -154,124 +105,133 @@ const CreditManage = () => {
 
       <div className="p-4">
 
-        {/* ADD CREDIT */}
-        <div className="bg-gray-100 border border-gray-300 p-4 mb-4">
-          <h2 className="mb-3 font-semibold">Add Credit</h2>
+        {/* ADD CREDIT PANEL */}
+        <div className="bg-gray-100 border border-gray-300 p-4 mb-4 rounded">
+          <h2 className="mb-3 font-semibold text-gray-800">Add Credit</h2>
 
-          <div className="flex gap-4 items-center flex-wrap">
+          <div className="flex gap-3 items-end flex-wrap">
 
-            {/* USER SEARCH */}
-            <div className="relative w-[300px]">
+            {/* User search dropdown */}
+            <div ref={dropRef} className="relative">
+              <label className="block text-xs text-gray-500 mb-1">Select User</label>
               <input
-                placeholder="Search By UserName"
+                placeholder="Search by Username"
                 value={searchUser}
-                onChange={(e) => { setSearchUser(e.target.value); setShowDropdown(true); }}
+                onChange={e => { setSearchUser(e.target.value); setShowDropdown(true); setSelectedUser(null); }}
                 onFocus={() => setShowDropdown(true)}
-                className="input w-full"
+                className="input w-[260px]"
               />
               {showDropdown && searchUser && (
-                <div className="absolute top-full left-0 w-full bg-white border border-gray-300 max-h-40 overflow-y-auto z-50">
-                  {filteredUsers.length === 0 ? (
-                    <div className="p-2 text-gray-500">No user found</div>
-                  ) : (
-                    filteredUsers.map((u) => (
-                      <div
-                        key={u.id}
-                        onClick={() => { setSelectedUser(u.id); setSearchUser(u.username); setShowDropdown(false); }}
-                        className="p-2 hover:bg-gray-100 cursor-pointer"
-                      >
-                        {u.username}
-                      </div>
-                    ))
-                  )}
+                <div className="absolute top-full left-0 w-full bg-white border border-gray-300 max-h-44 overflow-y-auto z-50 shadow rounded-b">
+                  {dropdownUsers.length === 0 ? (
+                    <div className="p-2 text-gray-400 text-sm">No user found</div>
+                  ) : dropdownUsers.map(u => (
+                    <div
+                      key={u.id}
+                      onClick={() => { setSelectedUser(u); setSearchUser(u.username); setShowDropdown(false); }}
+                      className="px-3 py-2 hover:bg-[#e8f8ff] cursor-pointer text-sm flex justify-between"
+                    >
+                      <span>{u.username}</span>
+                      <span className="text-gray-400 text-xs">{u.credit || 0} cr</span>
+                    </div>
+                  ))}
                 </div>
+              )}
+              {selectedUser && (
+                <p className="text-xs text-green-600 mt-1">
+                  Current balance: <strong>{selectedUser.credit || 0}</strong> credits
+                </p>
               )}
             </div>
 
-            <select value={service} onChange={(e) => setService(e.target.value)} className="input w-[220px]">
-              <option>WHATSAPP</option>
-              <option>DP WHATSAPP</option>
-            </select>
+            {/* Service */}
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Service</label>
+              <select value={service} onChange={e => setService(e.target.value)} className="input w-[200px]">
+                <option>WHATSAPP</option>
+                <option>DP WHATSAPP</option>
+              </select>
+            </div>
 
-            <input
-              type="number" placeholder="0"
-              value={credit} onChange={(e) => setCredit(e.target.value)}
-              className="input w-[190px]"
-            />
+            {/* Credit amount */}
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Credit Amount</label>
+              <input
+                type="number" min="1" placeholder="0"
+                value={credit} onChange={e => setCredit(e.target.value)}
+                className="input w-[160px]"
+              />
+            </div>
 
-            <input
-              placeholder="Notes"
-              value={notes} onChange={(e) => setNotes(e.target.value)}
-              className="input w-[250px]"
-            />
+            {/* Notes */}
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Notes</label>
+              <input
+                placeholder="Optional notes"
+                value={notes} onChange={e => setNotes(e.target.value)}
+                className="input w-[220px]"
+              />
+            </div>
 
-            <button onClick={handleSubmit} className="btn">Submit</button>
+            <button
+              onClick={handleSubmit}
+              disabled={loading}
+              className="btn flex items-center gap-2 disabled:opacity-60 self-end"
+            >
+              {loading
+                ? <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Adding...</>
+                : "Submit"
+              }
+            </button>
           </div>
         </div>
 
-        {/* TABLE */}
-        <div className="bg-white border border-gray-300 p-4">
-          <h2 className="mb-3 font-semibold">Manage SMPP Credit</h2>
-
-          <div className="flex justify-between mb-3 text-sm">
-            <div>
-              Show
-              <select className="mx-2 border px-2 py-1">
-                <option>10</option><option>25</option>
-                <option>50</option><option>100</option>
-              </select>
-              entries
-            </div>
-          </div>
+        {/* USERS TABLE */}
+        <div className="bg-white border border-gray-300 p-4 rounded">
+          <h2 className="mb-3 font-semibold text-gray-800">Manage SMPP Credit</h2>
 
           <div className="border border-gray-300 overflow-x-auto">
             <table className="w-full text-sm text-center border-collapse">
               <thead className="bg-[#2FA4C7] text-white">
                 <tr>
-                  <th className="p-3 border-r border-gray-200">ID</th>
-                  <th className="border-r border-gray-300">Username</th>
-                  <th className="border-r border-gray-300">Service</th>
-                  <th className="border-r border-gray-300">Credit</th>
-                  <th>Validity</th>
+                  {["ID", "Username", "Role", "Credit", "Status", "Validity"].map(h => (
+                    <th key={h} className="p-3 border-r border-gray-200 last:border-r-0">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {users.length === 0 ? (
-                  <tr><td colSpan="5" className="py-6 border-t border-gray-300">No data available</td></tr>
-                ) : (
-                  users.map((u, index) => (
-                    <tr key={u.id} className="bg-gray-100 border-t border-gray-300">
-                      <td className="p-3 border-r border-gray-300">{index + 1}</td>
-                      <td className="border-r border-gray-300">{u.username}</td>
-                      <td className="border-r border-gray-300">WHATSAPP</td>
-                      <td className="border-r border-gray-300">{u.credit || 0}</td>
-                      <td>{new Date().toLocaleDateString()}</td>
-                    </tr>
-                  ))
-                )}
+                  <tr><td colSpan="6" className="py-6 text-gray-500 border-t border-gray-300">No data available</td></tr>
+                ) : users.map((u, i) => (
+                  <tr key={u.id} className="bg-gray-100 border-t border-gray-300 hover:bg-gray-50 transition-colors">
+                    <td className="p-3 border-r border-gray-300">{i + 1}</td>
+                    <td className="border-r border-gray-300 font-medium">{u.username}</td>
+                    <td className="border-r border-gray-300 capitalize">{u.role}</td>
+                    <td className="border-r border-gray-300 font-semibold text-green-700">{u.credit || 0}</td>
+                    <td className="border-r border-gray-300">
+                      <span className={`px-2 py-0.5 rounded text-xs font-semibold ${u.status === "Active" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                        {u.status}
+                      </span>
+                    </td>
+                    <td>{new Date().toLocaleDateString()}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
 
-          <div className="flex justify-between mt-3 text-sm">
-            <div>Showing 1 to {users.length} of {users.length} entries</div>
-            <div className="flex gap-2">
-              <button className="border px-3 py-1">Previous</button>
-              <button className="bg-[#2FA4C7] text-white px-3 py-1">1</button>
-              <button className="border px-3 py-1">Next</button>
-            </div>
+          <div className="flex justify-between mt-3 text-sm text-gray-500">
+            <span>Showing {users.length} entries</span>
           </div>
         </div>
       </div>
 
       <style>{`
-        .input { padding: 8px; border: 1px solid #ccc; outline: none; }
-        .input:focus { border: 1px solid #22d3ee; }
-        .btn { background: #2FA4C7; color: white; padding: 8px 20px; cursor: pointer; transition: background 0.2s, transform 0.15s; }
-        .btn:hover { background: #1b8db8; transform: scale(1.03); }
+        .input { padding: 8px; border: 1px solid #ccc; outline: none; border-radius: 2px; font-size: 14px; background: white; }
+        .input:focus { border: 1px solid #22d3ee; box-shadow: 0 0 0 1px #22d3ee; }
+        .btn { background: #2FA4C7; color: white; padding: 8px 20px; cursor: pointer; border: none; border-radius: 2px; font-size: 14px; transition: background 0.2s; }
+        .btn:hover:not(:disabled) { background: #1b8db8; }
       `}</style>
     </div>
   );
-};
-
-export default CreditManage;
+}

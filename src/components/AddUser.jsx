@@ -1,156 +1,90 @@
-import React, { useState } from "react";
+import React, { useState, useCallback, memo } from "react";
+import Modal from "./Modal";
 
-// ── SUCCESS MODAL ─────────────────────────────
-function SuccessModal({ show, onClose }) {
-  if (!show) return null;
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 999,
-      background: "rgba(0,0,0,0.5)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      animation: "fadeIn 0.2s ease",
-    }}>
-      <div style={{
-        background: "#fff",
-        borderRadius: "20px",
-        width: "320px",
-        padding: "32px 24px 24px",
-        textAlign: "center",
-        animation: "popIn 0.4s cubic-bezier(.34,1.56,.64,1) both",
-        boxShadow: "0 20px 60px rgba(0,0,0,0.15)",
-      }}>
+const API = "https://whatsappsms-olho.onrender.com";
 
-        {/* GREEN CHECK CIRCLE */}
-        <div style={{
-          width: 68, height: 68,
-          borderRadius: "50%",
-          background: "#EAF3DE",
-          border: "3px solid #97C459",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          margin: "0 auto 16px",
-          animation: "spinIn 0.5s cubic-bezier(.34,1.56,.64,1) 0.1s both",
-        }}>
-          <i className="ti ti-check" style={{ fontSize: 32, color: "#3B6D11" }} />
-        </div>
-
-        <h2 style={{ fontSize: 18, fontWeight: 500, color: "#1f2937", margin: "0 0 8px" }}>
-          User Added Successfully
-        </h2>
-        <p style={{ fontSize: 14, color: "#6b7280", margin: "0 0 20px" }}>
-          New user has been created and saved.
-        </p>
-
-        <button
-          onClick={onClose}
-          style={{
-            background: "#3B6D11",
-            color: "#EAF3DE",
-            border: "none",
-            padding: "10px 32px",
-            borderRadius: 8,
-            fontSize: 14,
-            fontWeight: 500,
-            cursor: "pointer",
-            transition: "background 0.2s, transform 0.15s",
-          }}
-          onMouseOver={(e) => { e.target.style.background = "#27500A"; e.target.style.transform = "scale(1.04)"; }}
-          onMouseOut={(e) => { e.target.style.background = "#3B6D11"; e.target.style.transform = "scale(1)"; }}
-        >
-          OK
-        </button>
-      </div>
-
-      <style>{`
-        @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-        @keyframes popIn {
-          from { transform: scale(0.7); opacity: 0; }
-          to   { transform: scale(1);   opacity: 1; }
-        }
-        @keyframes spinIn {
-          from { transform: rotate(-90deg) scale(0.5); opacity: 0; }
-          to   { transform: rotate(0deg)  scale(1);   opacity: 1; }
-        }
-      `}</style>
-    </div>
-  );
+function getUser() {
+  try { return JSON.parse(sessionStorage.getItem("user") || "{}"); } catch { return {}; }
 }
 
-// ── MAIN COMPONENT ────────────────────────────
-const AddUser = () => {
-  const [form, setForm] = useState({
-    name: "", username: "", password: "",
-    email: "", mobile: "", company: "",
-    city: "", role: "User",
-  });
+const INITIAL_FORM = {
+  username: "", password: "", name: "",
+  mobile: "", email: "", company: "",
+  city: "", role: "user",
+};
 
-  const [showSuccess, setShowSuccess] = useState(false); // ← new
+export default function AddUser() {
+  const [form,        setForm]        = useState(INITIAL_FORM);
+  const [loading,     setLoading]     = useState(false);
+  const [modal,       setModal]       = useState(null);
 
-  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+  const showModal = useCallback((type, title, body = "") => setModal({ type, title, body }), []);
 
-  const currentUser = JSON.parse(sessionStorage.getItem("user"));
+  const handleChange = useCallback((e) => {
+    const { name, value } = e.target;
+    setForm(f => ({ ...f, [name]: value }));
+  }, []);
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = useCallback(async (e) => {
     e.preventDefault();
+
+    if (!form.username.trim() || !form.password.trim()) {
+      showModal("warning", "Required Fields ⚠️", "Username and Password are required.");
+      return;
+    }
+    if (form.username.trim().length < 3) {
+      showModal("warning", "Too Short ⚠️", "Username must be at least 3 characters.");
+      return;
+    }
+    if (form.password.trim().length < 3) {
+      showModal("warning", "Too Short ⚠️", "Password must be at least 3 characters.");
+      return;
+    }
+
+    setLoading(true);
+    const currentUser = getUser();
+
     try {
-      const res = await fetch("https://whatsappsms-olho.onrender.com/api/create-user/", {
-        method: "POST",
+      const res  = await fetch(`${API}/api/create-user/`, {
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: form.username,
-          password: form.password,
-          role: form.role.toLowerCase(),
-          parent: currentUser?.username || null,
+        body:    JSON.stringify({
+          username: form.username.trim().toLowerCase(),
+          password: form.password.trim(),
+          role:     form.role.toLowerCase(),
+          parent:   currentUser?.username || null,
         }),
       });
-
-      if (!res.ok) {
-        alert("Server error ❌");
-        return;
-      }
-
       const data = await res.json();
+
       if (data.status !== "success") {
-        alert(data.message || "Error ❌");
+        showModal("error", "Error ❌", data.message || "Could not create user.");
+        setLoading(false);
         return;
       }
 
-      const newUser = {
-        id: data.user_id,
-        username: form.username.trim().toLowerCase(),
-        password: form.password.trim(),
-        role: form.role.toLowerCase(),
-        parent: currentUser?.username,
-        status: "Active",
-      };
-
-
-      
-      // ✅ alert ki jagah modal
-      setShowSuccess(true);
-
-      setForm({
-        name: "", username: "", password: "",
-        email: "", mobile: "", company: "",
-        city: "", role: "User",
-      });
+      showModal("success", "User Added ✅", `"${form.username.trim()}" has been created successfully.`);
+      setForm(INITIAL_FORM);
 
     } catch (err) {
-      console.log("REAL ERROR:", err);
-      alert("Network / backend error ❌");
+      console.error("ADD USER ERROR:", err);
+      showModal("error", "Network Error ❌", "Could not connect to server. Please try again.");
     }
-  };
 
-  // Modal close hone ke baad reload
-  const handleModalClose = () => {
-    setShowSuccess(false);
-    window.location.reload();
-  };
+    setLoading(false);
+  }, [form, showModal]);
+
+  // Reload after success modal closes
+  const handleModalClose = useCallback(() => {
+    const wasSuccess = modal?.type === "success";
+    setModal(null);
+    if (wasSuccess) window.location.reload();
+  }, [modal]);
 
   return (
     <div className="min-h-screen bg-[#f1f1f1]">
 
-      {/* SUCCESS MODAL */}
-      <SuccessModal show={showSuccess} onClose={handleModalClose} />
+      <Modal modal={modal} onClose={handleModalClose} />
 
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[18px]">
@@ -159,37 +93,85 @@ const AddUser = () => {
       </div>
 
       <div className="flex justify-center p-6">
-        <div className="w-[50%] bg-white p-6">
-          <h2 className="text-[18px] mb-5">Add New User</h2>
+        <div className="w-full max-w-[600px] bg-white p-6 border border-gray-300 rounded">
 
-          <form onSubmit={handleSubmit}>
-            <div className="grid grid-cols-2 gap-5">
-              <input name="username" value={form.username} placeholder="Username" onChange={handleChange} className="input" />
-              <input type="password" name="password" value={form.password} placeholder="Password" onChange={handleChange} className="input" />
-              <input name="name" value={form.name} placeholder="Name" onChange={handleChange} className="input" />
-              <input name="mobile" value={form.mobile} placeholder="Mobile" onChange={handleChange} className="input" />
-              <input name="email" value={form.email} placeholder="Email" onChange={handleChange} className="input" />
-              <input name="company" value={form.company} placeholder="Company" onChange={handleChange} className="input" />
-              <input name="city" value={form.city} placeholder="City" onChange={handleChange} className="input" />
-              <select name="role" value={form.role} onChange={handleChange} className="input">
-                <option value="User">User</option>
-                <option value="Reseller">Reseller</option>
-              </select>
+          <h2 className="text-[18px] mb-5 font-semibold text-gray-800">Add New User</h2>
+
+          <form onSubmit={handleSubmit} noValidate>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Username *</label>
+                <input name="username" value={form.username} onChange={handleChange}
+                  placeholder="Username" className="input" autoCapitalize="none" />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Password *</label>
+                <input type="password" name="password" value={form.password} onChange={handleChange}
+                  placeholder="Password" className="input" />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Full Name</label>
+                <input name="name" value={form.name} onChange={handleChange}
+                  placeholder="Full Name" className="input" />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Mobile</label>
+                <input name="mobile" value={form.mobile} onChange={handleChange}
+                  placeholder="Mobile" className="input" type="tel" />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Email</label>
+                <input name="email" value={form.email} onChange={handleChange}
+                  placeholder="Email" className="input" type="email" />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Company</label>
+                <input name="company" value={form.company} onChange={handleChange}
+                  placeholder="Company" className="input" />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">City</label>
+                <input name="city" value={form.city} onChange={handleChange}
+                  placeholder="City" className="input" />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Role *</label>
+                <select name="role" value={form.role} onChange={handleChange} className="input">
+                  <option value="user">User</option>
+                  <option value="reseller">Reseller</option>
+                </select>
+              </div>
+
             </div>
 
-            <button type="submit" className="btn mt-6">Add User</button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn mt-6 flex items-center gap-2 disabled:opacity-60"
+            >
+              {loading
+                ? <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Adding...</>
+                : "Add User"
+              }
+            </button>
           </form>
         </div>
-        <div className="w-[50%]" />
       </div>
 
       <style>{`
-        .input { width: 100%; padding: 8px; border: 1px solid #e5e7eb; background: white; outline: none; }
+        .input { width: 100%; padding: 8px; border: 1px solid #e5e7eb; background: white; outline: none; border-radius: 2px; font-size: 14px; }
         .input:focus { border: 1px solid #22d3ee; box-shadow: 0 0 0 1px #22d3ee; }
-        .btn { background: #20A8D8; color: white; padding: 8px 20px; border-radius: 1px; cursor: pointer; }
+        .btn { background: #20A8D8; color: white; padding: 8px 20px; border: none; cursor: pointer; border-radius: 2px; font-size: 14px; transition: background 0.2s; }
+        .btn:hover:not(:disabled) { background: #1b8db8; }
       `}</style>
     </div>
   );
-};
-
-export default AddUser;
+}

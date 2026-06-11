@@ -1,41 +1,196 @@
+"""
+views.py — WhatsApp Campaign Platform
+Django REST API — Production Grade
+"""
+
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from django.db import transaction
 from .models import User, Campaign, CreditLog
-import requests
-from concurrent.futures import ThreadPoolExecutor
 
-# =========================
-# 🔥 CREATE USER
-# =========================
-@api_view(['POST'])
-def create_user(request):
+
+# ══════════════════════════════════════════════════════════════════
+# PRIVATE HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+def _get_user(user_id):
+    """
+    Fetch user by id.
+    Returns (user, None) on success, (None, Response) on failure.
+    """
+    if not user_id:
+        return None, Response({"status": "failed", "message": "Missing user_id"})
     try:
-        username = str(
-    request.data.get("username", "")
-).strip().lower()
-        password = str(
-    request.data.get("password", "")
-).strip()
-        role = request.data.get("role")
-        parent_username = request.data.get("parent")
+        return User.objects.get(id=user_id), None
+    except User.DoesNotExist:
+        return None, Response({"status": "failed", "message": "User not found"})
+
+
+def _serialize_user(u):
+    return {
+        "id":       u.id,
+        "username": u.username,
+        "email":    "",
+        "mobile":   "",
+        "role":     u.role,
+        "credit":   u.credit,
+        "status":   u.status,
+        "parent":   u.parent.username if u.parent else None,
+    }
+
+
+def _serialize_campaign(c):
+    return {
+        "id":         c.id,
+        "message":    c.message,
+        "total":      c.total,
+        "success":    c.success,
+        "failed":     c.failed,
+        "nonwa":      c.nonwa,
+        "rejected":   c.rejected,
+        "media":      c.media,
+        "results":    c.results,
+        "status":     c.status,
+        "created_at": c.created_at.isoformat(),
+        "numbers": [
+            r.get("number") or r.get("phone") or r.get("mobile")
+            for r in c.results
+            if isinstance(r, dict)
+        ],
+    }
+
+
+def _clean_results(raw):
+    """
+    Normalize Node.js result dicts into a consistent shape.
+    Handles all number key variants sent by the Node server.
+    """
+    out = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        out.append({
+            "number": (
+                r.get("number") or r.get("phone") or
+                r.get("mobile") or r.get("to") or ""
+            ),
+            "status": r.get("status", "unknown"),
+            "files":  r.get("files", []),
+        })
+    return out
+
+
+def _extract_media(results):
+    """Pull flat media list from cleaned results."""
+    media = []
+    for r in results:
+        for f in r.get("files", []):
+            if isinstance(f, dict) and f.get("name"):
+                media.append({"name": f["name"], "type": f.get("type", "")})
+    return media
+
+
+def _tally(results):
+    """Count sent / failed / nonwa in one pass."""
+    sent = failed = nonwa = 0
+    for r in results:
+        s = r.get("status")
+        if s == "sent":   sent   += 1
+        elif s == "failed": failed += 1
+        elif s == "nonwa":  nonwa  += 1
+    return sent, failed, nonwa
+
+
+def _credit_log(user, service, credit, credit_type, old_credit, notes, results=None):
+    CreditLog.objects.create(
+        user       = user,
+        service    = service,
+        credit     = credit,
+        type       = credit_type,
+        old_credit = old_credit,
+        new_credit = user.credit,
+        notes      = notes,
+        results    = results or [],
+    )
+
+
+# ══════════════════════════════════════════════════════════════════
+# AUTH
+# ══════════════════════════════════════════════════════════════════
+
+@api_view(["POST"])
+def login(request):
+    """
+    POST /api/login/
+    Body: { username, password }
+    """
+    try:
+        username = str(request.data.get("username", "")).strip().lower()
+        password = str(request.data.get("password", "")).strip()
+
+        if not username or not password:
+            return Response({"status": "failed", "message": "Missing credentials"})
+
+        user = User.objects.filter(username__iexact=username).first()
+
+        # Single error message prevents username enumeration
+        if not user or str(user.password).strip() != password:
+            return Response({"status": "failed", "message": "Invalid username or password ❌"})
+
+        if user.status != "Active":
+            return Response({"status": "failed", "message": "Account disabled ❌"})
+
+        return Response({
+            "status":   "success",
+            "user_id":  user.id,
+            "username": user.username,
+            "role":     user.role,
+            "credit":   user.credit,
+        })
+
+    except Exception as e:
+        print("LOGIN ERROR:", e)
+        return Response({"status": "error"})
+
+
+# ══════════════════════════════════════════════════════════════════
+# USER — CRUD
+# ══════════════════════════════════════════════════════════════════
+
+@api_view(["POST"])
+def create_user(request):
+    """
+    POST /api/create-user/
+    Body: { username, password, role, parent? }
+    """
+    try:
+        username = str(request.data.get("username", "")).strip().lower()
+        password = str(request.data.get("password", "")).strip()
+        role     = request.data.get("role", "user")
 
         if not username or not password:
             return Response({"status": "failed", "message": "Missing fields"})
 
+        if len(username) < 3:
+            return Response({"status": "failed", "message": "Username too short"})
+
         if User.objects.filter(username=username).exists():
-            return Response({"status": "failed", "message": "User exists"})
+            return Response({"status": "failed", "message": "Username already exists"})
 
         parent = None
+        parent_username = request.data.get("parent")
         if parent_username:
             parent = User.objects.filter(username=parent_username).first()
+            if not parent:
+                return Response({"status": "failed", "message": "Parent user not found"})
 
         user = User.objects.create(
-            username=username,
-            password=password,
-            role=role,
-            parent=parent,
-            credit=0,
-            status="Active"
+            username = username,
+            password = password,
+            role     = role,
+            parent   = parent,
+            credit   = 0,
+            status   = "Active",
         )
 
         return Response({"status": "success", "user_id": user.id})
@@ -45,606 +200,364 @@ def create_user(request):
         return Response({"status": "error"})
 
 
-# =========================
-# CREDIT HISTORY
-# =========================
-@api_view(['GET'])
-def get_credit_logs(request):
-    user_id = request.GET.get("user_id")
-
-    logs = CreditLog.objects.filter(user_id=user_id).order_by("-created_at")
-
-    data = []
-    for l in logs:
-        data.append({
-            "username": l.user.username,
-            "service": l.service,
-            "credit": l.credit,
-            "type": l.type,
-            "transTime": l.created_at.strftime("%d-%m-%Y %H:%M"),
-            "oldCredit": l.old_credit,
-            "newCredit": l.new_credit,
-            "sysnotes": "",
-            "notes": l.notes,
-            "results": l.results,
-            "numbers": [r.get("number") for r in l.results if isinstance(r, dict)]
-        })
-
-    return Response(data)
+@api_view(["GET"])
+def get_user(request):
+    """
+    GET /api/get-user/?user_id=X
+    Returns single user basic info (used for credit refresh in frontend).
+    """
+    user, err = _get_user(request.GET.get("user_id"))
+    if err:
+        return err
+    return Response({
+        "id":       user.id,
+        "username": user.username,
+        "credit":   user.credit,
+        "role":     user.role,
+    })
 
 
-# =========================
-# GET USERS
-# =========================
-@api_view(['GET'])
+@api_view(["GET"])
 def get_users(request):
+    """
+    GET /api/get-users/?user_id=X
+    Admin → all users
+    Reseller → own children only
+    User → own record only
+    """
     try:
-        user_id = request.GET.get("user_id")
-        user = User.objects.get(id=user_id)
+        user, err = _get_user(request.GET.get("user_id"))
+        if err:
+            return Response([])
 
         if user.role == "admin":
-            users = User.objects.all()
+            qs = User.objects.select_related("parent").all()
         elif user.role == "reseller":
-            users = User.objects.filter(parent=user)
+            qs = User.objects.select_related("parent").filter(parent=user)
         else:
-            users = User.objects.filter(id=user.id)
+            qs = User.objects.filter(id=user.id)
 
-        data = []
-        for u in users:
-            data.append({
-                "id": u.id,
-                "username": u.username,
-                "email": "",
-                "mobile": "",
-                "role": u.role,
-                "credit": u.credit,
-                "status": u.status,
-                "parent": u.parent.username if u.parent else None,
-            })
-
-        return Response(data)
+        return Response([_serialize_user(u) for u in qs])
 
     except Exception as e:
         print("GET USERS ERROR:", e)
         return Response([])
 
 
-# =========================
-# UPDATE USER
-# =========================
-@api_view(['POST'])
+@api_view(["POST"])
 def update_user(request):
+    """
+    POST /api/update-user/
+    Body: { user_id, username?, password?, role?, status?, credit? }
 
+    Credit logic:
+      - diff > 0 (adding credit to child) → deduct from parent (if parent is not admin)
+      - diff < 0 (removing credit from child) → return to parent
+    """
     try:
-
-        user = User.objects.get(
-            id=request.data.get("user_id")
-        )
+        user, err = _get_user(request.data.get("user_id"))
+        if err:
+            return err
 
         old_credit = int(user.credit or 0)
 
-        # ------------------------------------------------
-        # 🔥 USER UPDATE
-        # ------------------------------------------------
-        user.username = str(
-            request.data.get(
-                "username",
-                user.username
-            )
-        ).strip().lower()
+        # ── Field updates ──
+        user.username = str(request.data.get("username", user.username)).strip().lower()
+        user.password = str(request.data.get("password", user.password)).strip()
+        user.role     = request.data.get("role",   user.role)
+        user.status   = request.data.get("status", user.status)
 
-        user.password = str(
-            request.data.get(
-                "password",
-                user.password
-            )
-        ).strip()
-
-        user.role = request.data.get(
-            "role",
-            user.role
-        )
-
-        user.status = request.data.get(
-            "status",
-            user.status
-        )
-
-        # ------------------------------------------------
-        # 🔥 CREDIT LOGIC
-        # ------------------------------------------------
-        new_credit = int(
-            request.data.get(
-                "credit",
-                user.credit
-            ) or 0
-        )
-
+        new_credit = int(request.data.get("credit", user.credit) or 0)
         diff = new_credit - old_credit
 
-        # =================================================
-        # 🔥 PARENT CREDIT DEDUCT / RETURN
-        # =================================================
-        if user.parent:
+        # ── Parent credit transfer (atomic) ──
+        with transaction.atomic():
+            if user.parent and diff != 0:
+                parent = User.objects.select_for_update().get(id=user.parent_id)
 
-            parent = user.parent
+                if diff > 0:
+                    # Adding credit to child — deduct from parent
+                    if parent.role != "admin":
+                        if parent.credit < diff:
+                            return Response({
+                                "status":  "failed",
+                                "message": "Parent has insufficient balance ❌",
+                            })
+                        parent.credit -= diff
+                    parent.save()
 
-            # ---------------------------------------------
-            # CREDIT ADDING TO CHILD
-            # ---------------------------------------------
-            if diff > 0:
+                else:
+                    # Removing credit from child — return to parent
+                    parent.credit += abs(diff)
+                    parent.save()
 
-                # parent balance check
-                if parent.role != "admin":
+            user.credit = new_credit
+            user.save()
 
-                    if parent.credit < diff:
-
-                        return Response({
-                            "status": "failed",
-                            "message":
-                                "Parent has insufficient balance ❌"
-                        })
-
-                    # 🔥 DEDUCT FROM PARENT
-                    parent.credit -= diff
-
-                parent.save()
-
-            # ---------------------------------------------
-            # CREDIT REMOVING FROM CHILD
-            # ---------------------------------------------
-            elif diff < 0:
-
-                # 🔥 RETURN TO PARENT
-                parent.credit += abs(diff)
-
-                parent.save()
-
-        # ------------------------------------------------
-        # 🔥 SAVE USER CREDIT
-        # ------------------------------------------------
-        user.credit = new_credit
-
-        user.save()
-
-        # ------------------------------------------------
-        # 🔥 CREDIT LOG
-        # ------------------------------------------------
+        # ── Credit log ──
         if diff != 0:
-
-            CreditLog.objects.create(
-
-                user=user,
-
-                service="WHATSAPP",
-
-                credit=abs(diff),
-
-                type="Credit" if diff > 0 else "Debit",
-
-                old_credit=old_credit,
-
-                new_credit=user.credit,
-
-                notes=(
-                    f"Credit Added by Parent"
-                    if diff > 0
-                    else f"Credit Removed"
-                )
+            _credit_log(
+                user       = user,
+                service    = "WHATSAPP",
+                credit     = abs(diff),
+                credit_type = "Credit" if diff > 0 else "Debit",
+                old_credit  = old_credit,
+                notes       = "Credit Added by Parent" if diff > 0 else "Credit Removed",
             )
 
-        return Response({
-            "status": "success"
-        })
+        return Response({"status": "success"})
 
     except Exception as e:
-
         print("UPDATE USER ERROR:", e)
+        return Response({"status": "failed"})
 
-        return Response({
-            "status": "failed"
-        })
 
-# =========================
-# DELETE USER
-# =========================
-@api_view(['POST'])
+@api_view(["POST"])
 def delete_user(request):
+    """
+    POST /api/delete-user/
+    Body: { user_id }
+    """
     try:
-        user = User.objects.get(id=request.data.get("user_id"))
+        user, err = _get_user(request.data.get("user_id"))
+        if err:
+            return err
         user.delete()
         return Response({"status": "success"})
+
     except Exception as e:
         print("DELETE ERROR:", e)
         return Response({"status": "error"})
 
 
-# =========================
-# TOGGLE STATUS
-# =========================
-@api_view(['POST'])
+@api_view(["POST"])
 def toggle_user_status(request):
+    """
+    POST /api/toggle-status/
+    Body: { user_id }
+    Flips Active ↔ Deactive.
+    """
     try:
-        user = User.objects.get(id=request.data.get("user_id"))
+        user, err = _get_user(request.data.get("user_id"))
+        if err:
+            return err
         user.status = "Deactive" if user.status == "Active" else "Active"
-        user.save()
+        user.save(update_fields=["status"])
         return Response({"status": "success", "new_status": user.status})
+
     except Exception as e:
         print("STATUS ERROR:", e)
         return Response({"status": "error"})
 
 
-# =========================
-# RESET PASSWORD
-# =========================
-@api_view(['POST'])
+@api_view(["POST"])
 def reset_password(request):
+    """
+    POST /api/reset-password/
+    Body: { user_id, password }
+    """
     try:
-        user = User.objects.get(id=request.data.get("user_id"))
-        user.password = str(
-    request.data.get("password", "")
-).strip()
-        user.save()
+        user, err = _get_user(request.data.get("user_id"))
+        if err:
+            return err
+
+        new_password = str(request.data.get("password", "")).strip()
+        if not new_password:
+            return Response({"status": "failed", "message": "Password cannot be empty"})
+
+        user.password = new_password
+        user.save(update_fields=["password"])
         return Response({"status": "success"})
+
     except Exception as e:
         print("RESET ERROR:", e)
         return Response({"status": "error"})
 
 
-# =========================
-# LOGIN
-# =========================
-@api_view(['POST'])
-def login(request):
-    try:
+# ══════════════════════════════════════════════════════════════════
+# CREDIT LOGS
+# ══════════════════════════════════════════════════════════════════
 
-        username = str(
-            request.data.get("username", "")
-        ).strip().lower()
+@api_view(["GET"])
+def get_credit_logs(request):
+    """
+    GET /api/get-credit-logs/?user_id=X
+    Returns all credit transactions for a user, newest first.
+    """
+    user_id = request.GET.get("user_id")
+    if not user_id:
+        return Response([])
 
-        password = str(
-            request.data.get("password", "")
-        ).strip()
+    logs = (
+        CreditLog.objects
+        .select_related("user")
+        .filter(user_id=user_id)
+        .order_by("-created_at")
+    )
 
-        user = User.objects.filter(
-            username__iexact=username
-        ).first()
-
-        if not user:
-            return Response({
-                "status": "failed",
-                "message": "Invalid username or password ❌"
-            })
-
-        if str(user.password).strip() != password:
-            return Response({
-                "status": "failed",
-                "message": "Invalid username or password ❌"
-            })
-
-        if user.status != "Active":
-            return Response({
-                "status": "failed",
-                "message": "Account disabled ❌"
-            })
-
-        return Response({
-            "status": "success",
-            "user_id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "credit": user.credit
-        })
-
-    except Exception as e:
-        print("LOGIN ERROR:", e)
-
-        return Response({
-            "status": "error"
-        })
-
-# =========================
-# SEND SINGLE (NODE CALL)
-# =========================
-def send_single(number, message):
-    try:
-        number = number.strip()
-        if not number.startswith("91"):
-            number = "91" + number
-
-        url = "http://localhost:5000/send-msg"
-        res = requests.get(url, params={"number": number, "message": message}, timeout=10).json()
-        return {"status": "success"} if res.get("status") == "sent" else {"status": "failed"}
-
-    except Exception as e:
-        print("SEND ERROR:", e)
-        return {"status": "failed"}
+    return Response([
+        {
+            "username":  log.user.username,
+            "service":   log.service,
+            "credit":    log.credit,
+            "type":      log.type,
+            "transTime": log.created_at.strftime("%d-%m-%Y %H:%M"),
+            "oldCredit": log.old_credit,
+            "newCredit": log.new_credit,
+            "sysnotes":  "",
+            "notes":     log.notes,
+            "results":   log.results,
+            "numbers": [
+                r.get("number") for r in log.results
+                if isinstance(r, dict)
+            ],
+        }
+        for log in logs
+    ])
 
 
-# =========================
-# 🔥 SEND CAMPAIGN — UPDATED
-# Handles: instant (completed) + queue first-save (pending) + queue update (completed)
-# =========================
-@api_view(['POST'])
+# ══════════════════════════════════════════════════════════════════
+# CAMPAIGN
+# ══════════════════════════════════════════════════════════════════
+
+@api_view(["POST"])
 def send_whatsapp(request):
+    """
+    POST /api/send-whatsapp/
+    Called in 3 scenarios:
+
+    1. INSTANT SEND (≤10 numbers, completed immediately by Node)
+       Body: { results, message, total, user_id, status="completed" }
+
+    2. QUEUE PRE-SAVE (>10 numbers, React pre-saves before Node queues)
+       Body: { results, message, total, user_id, status="pending" }
+       → Deducts credit, saves Campaign with status=pending, returns campaign_id
+
+    3. QUEUE COMPLETION (Node worker calls back when done)
+       Body: { results, message, total, user_id, campaign_id, status="completed" }
+       → Updates existing Campaign with real results, marks completed
+       → Does NOT deduct credit (already deducted in step 2)
+    """
     try:
-        results     = request.data.get("results", [])
-        message     = request.data.get("message", "")
-        total       = int(request.data.get("total", 0))
-        user_id     = request.data.get("user_id")
-        status      = request.data.get("status", "completed")
-        campaign_id = request.data.get("campaign_id", None)
+        d = request.data
 
-        user = User.objects.get(id=user_id)
+        results     = d.get("results", [])
+        message     = d.get("message", "")
+        total       = int(d.get("total", 0))
+        user_id     = d.get("user_id")
+        status      = d.get("status", "completed")
+        campaign_id = d.get("campaign_id")          # set only by Node worker callback
 
-        print("🔥 RESULTS RECEIVED:", results)
-        print("🔥 RESULTS TYPE:", type(results))
-        print("🔥 RESULTS LENGTH:", len(results))
+        user, err = _get_user(user_id)
+        if err:
+            return Response({"status": "error", "message": "User not found"})
 
-        # ======================================================
-        # 🔥 CLEAN RESULTS FORMAT — IMPORTANT FIX
-        # ======================================================
-        clean_results = []
+        clean = _clean_results(results)
 
-        for r in results:
-
-            if isinstance(r, dict):
-
-                clean_results.append({
-
-                    "number":
-                        r.get("number")
-                        or r.get("phone")
-                        or r.get("mobile")
-                        or r.get("to")
-                        or "",
-
-                    "status":
-                        r.get("status", "unknown"),
-
-                    "files":
-                        r.get("files", [])
-
-                })
-
-        # -----------------------------------------------
-        # 🔥 CASE 1: Queue worker update
-        # -----------------------------------------------
+        # ── SCENARIO 3: Queue worker callback — update existing campaign ──
         if campaign_id:
             try:
-
                 campaign = Campaign.objects.get(id=campaign_id)
-
-                success = len([
-                    r for r in clean_results
-                    if r.get("status") == "sent"
-                ])
-
-                failed = len([
-                    r for r in clean_results
-                    if r.get("status") == "failed"
-                ])
-
-                nonwa = len([
-                    r for r in clean_results
-                    if r.get("status") == "nonwa"
-                ])
-
-                # 🔥 Media extract
-                media = []
-
-                for r in clean_results:
-
-                    if isinstance(r, dict):
-
-                        for f in r.get("files", []):
-
-                            if isinstance(f, dict):
-
-                                media.append({
-                                    "name": f.get("name"),
-                                    "type": f.get("type")
-                                })
-
-                campaign.success = success
+                sent, failed, nonwa = _tally(clean)
+                campaign.success = sent
                 campaign.failed  = failed
                 campaign.nonwa   = nonwa
-                campaign.media   = media
-                campaign.results = clean_results
+                campaign.media   = _extract_media(clean)
+                campaign.results = clean
                 campaign.status  = "completed"
-
                 campaign.save()
-
                 return Response({
-                    "status": "ok",
-                    "message": "Campaign marked completed",
+                    "status":      "ok",
+                    "message":     "Campaign marked completed",
                     "campaign_id": campaign.id,
                 })
-
             except Campaign.DoesNotExist:
+                # campaign_id invalid — fall through to create new
                 pass
 
-        # -----------------------------------------------
-        # 🔥 CREDIT CHECK
-        # -----------------------------------------------
+        # ── SCENARIO 1 & 2: New campaign — credit check then save ──
         old_credit = user.credit
 
         if user.role != "admin":
-
             if user.credit < total:
+                return Response({"status": "failed", "message": "Insufficient Balance ❌"})
+            with transaction.atomic():
+                # Re-fetch with lock to prevent double-spend
+                locked_user = User.objects.select_for_update().get(id=user.id)
+                if locked_user.credit < total:
+                    return Response({"status": "failed", "message": "Insufficient Balance ❌"})
+                locked_user.credit -= total
+                locked_user.save(update_fields=["credit"])
+                user.credit = locked_user.credit   # reflect locally
 
-                return Response({
-                    "status": "failed",
-                    "message": "Insufficient Balance ❌"
-                })
-
-            user.credit -= total
-            user.save()
-
-        # -----------------------------------------------
-        # 🔥 RESULT CALCULATION
-        # -----------------------------------------------
+        # Tally (pending campaigns have 0/0/0 — results not processed yet)
         if status == "pending":
-
-            success = 0
-            failed  = 0
-            nonwa   = 0
-
+            sent = failed = nonwa = 0
         else:
+            sent, failed, nonwa = _tally(clean)
 
-            success = len([
-                r for r in clean_results
-                if r.get("status") == "sent"
-            ])
-
-            failed = len([
-                r for r in clean_results
-                if r.get("status") == "failed"
-            ])
-
-            nonwa = len([
-                r for r in clean_results
-                if r.get("status") == "nonwa"
-            ])
-
-        # -----------------------------------------------
-        # 🔥 MEDIA EXTRACT
-        # -----------------------------------------------
-        media = []
-
-        for r in clean_results:
-
-            if isinstance(r, dict):
-
-                for f in r.get("files", []):
-
-                    if isinstance(f, dict):
-
-                        media.append({
-                            "name": f.get("name"),
-                            "type": f.get("type")
-                        })
-
-        # -----------------------------------------------
-        # 🔥 SAVE CAMPAIGN
-        # -----------------------------------------------
         campaign = Campaign.objects.create(
-
             user    = user,
             message = message,
-
             total   = total,
-
-            success = success,
+            success = sent,
             failed  = failed,
             nonwa   = nonwa,
-
-            media   = media,
-
-            results = clean_results,
-
+            media   = _extract_media(clean),
+            results = clean,
             status  = status,
         )
 
-        # -----------------------------------------------
-        # 🔥 CREDIT LOG
-        # -----------------------------------------------
-        CreditLog.objects.create(
-
-            user       = user,
-
-            service    = "WHATSAPP",
-
-            credit     = total,
-
-            type       = "Debit",
-
-            old_credit = old_credit,
-
-            new_credit = user.credit,
-
-            notes      = f"Campaign {'queued' if status == 'pending' else 'sent'}",
-
-            results    = clean_results,
+        _credit_log(
+            user        = user,
+            service     = "WHATSAPP",
+            credit      = total,
+            credit_type = "Debit",
+            old_credit  = old_credit,
+            notes       = f"Campaign {'queued' if status == 'pending' else 'sent'}",
+            results     = clean,
         )
 
         return Response({
-            "status": "saved",
+            "status":           "saved",
             "remaining_credit": user.credit,
-            "campaign_id": campaign.id,
+            "campaign_id":      campaign.id,
         })
 
     except Exception as e:
-
         print("SEND ERROR:", e)
-
-        return Response({
-            "status": "error"
-        })
-
-# =========================
-# GET USER
-# =========================
-@api_view(['GET'])
-def get_user(request):
-    user_id = request.GET.get("user_id")
-    try:
-        user = User.objects.get(id=user_id)
-        return Response({
-            "id": user.id,
-            "username": user.username,
-            "credit": user.credit,
-            "role": user.role
-        })
-    except:
         return Response({"status": "error"})
 
 
-# =========================
-# 🔥 GET CAMPAIGNS — UPDATED (status field added)
-# =========================
-@api_view(['GET'])
+@api_view(["GET"])
 def get_campaigns(request):
+    """
+    GET /api/get-campaigns/?user_id=X
+    Admin   → all campaigns
+    Reseller → own + children's campaigns
+    User    → own campaigns only
+    All ordered newest-first.
+    """
     try:
-        user_id = request.GET.get("user_id")
- 
-        if not user_id:
+        user, err = _get_user(request.GET.get("user_id"))
+        if err:
             return Response([])
 
-        user = User.objects.get(id=user_id)
-
-        # Role based data
         if user.role == "admin":
-            campaigns = Campaign.objects.all().order_by("-created_at")
+            qs = Campaign.objects.select_related("user").order_by("-created_at")
+
         elif user.role == "reseller":
-            campaigns = Campaign.objects.filter(
-                user__in=[user] + list(user.children.all())
+            child_ids = list(
+                user.children.values_list("id", flat=True)
+            )
+            qs = Campaign.objects.select_related("user").filter(
+                user_id__in=[user.id, *child_ids]
             ).order_by("-created_at")
+
         else:
-            campaigns = Campaign.objects.filter(user=user).order_by("-created_at")
+            qs = Campaign.objects.filter(user=user).order_by("-created_at")
 
-        data = []
-        for c in campaigns:
-            data.append({
-                "id": c.id,                          # 🔥 Campaign ID (queue update ke liye)
-                "message": c.message,
-                "total": c.total,
-                "success": c.success,
-                "failed": c.failed,
-                "nonwa": getattr(c, "nonwa", 0),
-                "rejected": getattr(c, "rejected", 0),
-                "media": getattr(c, "media", []),
-                "results": c.results,
-                "status": c.status,                  # 🔥 "pending" or "completed"
-                "created_at": c.created_at.isoformat(),
-                "numbers": [
-                    r.get("number") or r.get("phone") or r.get("mobile")
-                    for r in c.results
-                    if isinstance(r, dict)
-                ],
-            })
-
-        return Response(data)
+        return Response([_serialize_campaign(c) for c in qs])
 
     except Exception as e:
         print("GET CAMPAIGN ERROR:", e)

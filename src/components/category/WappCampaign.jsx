@@ -1,230 +1,207 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, memo } from "react";
 import { useDropzone } from "react-dropzone";
 import { FaComments } from "react-icons/fa";
 
-// ===============================
-// 🔥 CUSTOM MODAL — replaces all alert()
-// ===============================
-function Modal({ modal, onClose }) {
+// ─────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────
+const API_NODE   = "https://wa.cloudwhatsapp.in";
+const API_DJANGO = "https://whatsappsms-olho.onrender.com";
+const QUEUE_THRESHOLD = 50;
+
+// ─────────────────────────────────────────────
+// MODAL — memoized so it never re-renders unless modal changes
+// ─────────────────────────────────────────────
+const MODAL_STYLES = {
+  success: { emoji: "🚀", bg: "from-green-500 to-emerald-600", border: "border-green-200", text: "text-green-700", light: "bg-green-50" },
+  error:   { emoji: "❌", bg: "from-red-500 to-rose-600",      border: "border-red-200",   text: "text-red-700",   light: "bg-red-50"   },
+  warning: { emoji: "⚠️", bg: "from-orange-400 to-orange-500", border: "border-orange-200",text: "text-orange-700",light: "bg-orange-50" },
+  info:    { emoji: "⏳", bg: "from-blue-500 to-blue-600",     border: "border-blue-200",  text: "text-blue-700",  light: "bg-blue-50"  },
+};
+
+const Modal = memo(({ modal, onClose }) => {
   if (!modal) return null;
-
-  const icons = {
-    success: { emoji: "🚀", bg: "from-green-500 to-emerald-600", border: "border-green-200", textColor: "text-green-700", bgLight: "bg-green-50" },
-    error: { emoji: "❌", bg: "from-red-500 to-rose-600", border: "border-red-200", textColor: "text-red-700", bgLight: "bg-red-50" },
-    warning: { emoji: "⚠️", bg: "from-orange-400 to-orange-500", border: "border-orange-200", textColor: "text-orange-700", bgLight: "bg-orange-50" },
-    info: { emoji: "⏳", bg: "from-blue-500 to-blue-600", border: "border-blue-200", textColor: "text-blue-700", bgLight: "bg-blue-50" },
-  };
-
-  const style = icons[modal.type] || icons.info;
-
+  const s = MODAL_STYLES[modal.type] || MODAL_STYLES.info;
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-        <div className={`modal-icon-circle bg-gradient-to-br ${style.bg}`}>
-          <span className="modal-emoji">{style.emoji}</span>
+        <div className={`modal-icon-circle bg-gradient-to-br ${s.bg}`}>
+          <span className="modal-emoji">{s.emoji}</span>
         </div>
         <h2 className="modal-title">{modal.title}</h2>
         {modal.body && (
-          <div className={`modal-body-box ${style.bgLight} ${style.border} ${style.textColor}`}>
+          <div className={`modal-body-box ${s.light} ${s.border} ${s.text}`}>
             {modal.body}
           </div>
         )}
-        <button className={`modal-close-btn bg-gradient-to-r ${style.bg}`} onClick={onClose}>
+        <button className={`modal-close-btn bg-gradient-to-r ${s.bg}`} onClick={onClose}>
           OK
         </button>
       </div>
-
-      <style>{`
-        .modal-overlay {
-          position: fixed; inset: 0; z-index: 100;
-          display: flex; align-items: center; justify-content: center;
-          background: rgba(0,0,0,0.55);
-          backdrop-filter: blur(4px);
-          animation: fadeIn 0.18s ease;
-        }
-        .modal-box {
-          background: #fff;
-          border-radius: 20px;
-          box-shadow: 0 25px 60px rgba(0,0,0,0.18);
-          width: 92%; max-width: 400px;
-          padding: 32px 28px 28px;
-          text-align: center;
-          animation: slideUp 0.22s cubic-bezier(.4,0,.2,1);
-        }
-        .modal-icon-circle {
-          width: 62px; height: 62px;
-          border-radius: 50%;
-          display: flex; align-items: center; justify-content: center;
-          margin: 0 auto 16px;
-          box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-        }
-        .modal-emoji { font-size: 26px; line-height: 1; }
-        .modal-title {
-          font-size: 18px; font-weight: 700;
-          color: #1f2937; margin-bottom: 12px;
-          line-height: 1.4;
-        }
-        .modal-body-box {
-          border-radius: 10px; border: 1px solid;
-          padding: 12px 14px;
-          font-size: 14px; line-height: 1.6;
-          margin-bottom: 20px;
-          text-align: left;
-          white-space: pre-line;
-        }
-        .modal-close-btn {
-          color: #fff; border: none; cursor: pointer;
-          padding: 10px 36px;
-          border-radius: 10px;
-          font-size: 15px; font-weight: 600;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-          transition: opacity 0.15s, transform 0.15s;
-        }
-        .modal-close-btn:hover { opacity: 0.9; transform: scale(1.04); }
-        @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-        @keyframes slideUp { from { transform: translateY(30px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
-      `}</style>
+      <style>{MODAL_CSS}</style>
     </div>
   );
+});
+
+const MODAL_CSS = `
+  .modal-overlay{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);animation:fadeIn .18s ease}
+  .modal-box{background:#fff;border-radius:20px;box-shadow:0 25px 60px rgba(0,0,0,.18);width:92%;max-width:400px;padding:32px 28px 28px;text-align:center;animation:slideUp .22s cubic-bezier(.4,0,.2,1)}
+  .modal-icon-circle{width:62px;height:62px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;box-shadow:0 6px 20px rgba(0,0,0,.15)}
+  .modal-emoji{font-size:26px;line-height:1}
+  .modal-title{font-size:18px;font-weight:700;color:#1f2937;margin-bottom:12px;line-height:1.4}
+  .modal-body-box{border-radius:10px;border:1px solid;padding:12px 14px;font-size:14px;line-height:1.6;margin-bottom:20px;text-align:left;white-space:pre-line}
+  .modal-close-btn{color:#fff;border:none;cursor:pointer;padding:10px 36px;border-radius:10px;font-size:15px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:opacity .15s,transform .15s}
+  .modal-close-btn:hover{opacity:.9;transform:scale(1.04)}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @keyframes slideUp{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
+`;
+
+// ─────────────────────────────────────────────
+// UPLOAD BOX — memoized with stable setter refs
+// ─────────────────────────────────────────────
+const UploadBox = memo(({ title, type, color, images, video, pdf, setImages, setVideo, setPdf }) => {
+  const { getRootProps, getInputProps } = useDropzone({
+    accept:
+      type === "image" ? { "image/*": [] }
+      : type === "video" ? { "video/*": [] }
+      : { "application/pdf": [] },
+    multiple: type === "image",
+    onDrop: useCallback((files) => {
+      if (!files.length) return;
+      if (type === "image") setImages((p) => [...p, ...files].slice(0, 4));
+      if (type === "video") setVideo(files[0]);
+      if (type === "pdf")   setPdf(files[0]);
+    }, [type, setImages, setVideo, setPdf]),
+  });
+
+  const removeImage = useCallback((idx, e) => {
+    e.stopPropagation();
+    setImages((p) => p.filter((_, i) => i !== idx));
+  }, [setImages]);
+
+  return (
+    <div className="border border-gray-300 rounded overflow-hidden">
+      <div className={`${color} text-white px-4 py-2 text-[13px] font-semibold`}>{title}</div>
+      <div {...getRootProps()} className="bg-gray-100 text-gray-600 text-center p-3 min-h-[120px] cursor-pointer hover:bg-gray-200 transition">
+        <input {...getInputProps()} />
+        {type === "image" && images.length > 0 ? (
+          <div className="flex gap-2 flex-wrap justify-center">
+            {images.map((img, i) => (
+              <div key={i} className="relative">
+                <img src={URL.createObjectURL(img)} alt="" className="w-16 h-16 object-cover border rounded" />
+                <button onClick={(e) => removeImage(i, e)} className="absolute top-0 right-0 bg-red-500 text-white text-xs px-1">✕</button>
+              </div>
+            ))}
+          </div>
+        ) : type === "video" && video ? (
+          <div>
+            <video src={URL.createObjectURL(video)} className="w-28 mx-auto" controls />
+            <button onClick={(e) => { e.stopPropagation(); setVideo(null); }} className="mt-1 text-red-500 text-xs underline block mx-auto">Remove</button>
+          </div>
+        ) : type === "pdf" && pdf ? (
+          <div>
+            <p className="text-sm">📄 {pdf.name}</p>
+            <button onClick={(e) => { e.stopPropagation(); setPdf(null); }} className="mt-1 text-red-500 text-xs underline">Remove</button>
+          </div>
+        ) : (
+          <>Drag & Drop {type} files<br />or <span className="underline">Browse {type}</span></>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+function getUser() {
+  try { return JSON.parse(sessionStorage.getItem("user") || "{}"); } catch { return {}; }
 }
 
-// ===============================
-// 🔥 MAIN COMPONENT
-// ===============================
-export default function WappCampaign() {
-  const [images, setImages] = useState([]);
-  const [video, setVideo] = useState(null);
-  const [pdf, setPdf] = useState(null);
+function buildFilesData(images, video, pdf) {
+  return [
+    ...images.map((f) => ({ name: f.name, type: f.type })),
+    ...(video ? [{ name: video.name, type: video.type }] : []),
+    ...(pdf   ? [{ name: pdf.name,   type: pdf.type   }] : []),
+  ];
+}
 
-  const [campaignName, setCampaignName] = useState("");
-  const [numbers, setNumbers] = useState("");
-  const [message, setMessage] = useState("");
-
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [modal, setModal] = useState(null); // { type, title, body }
-
-  const user = JSON.parse(sessionStorage.getItem("user") || "{}");
-  const userRole = (user?.role || "user").toLowerCase();
-  const isAdmin = userRole === "admin";
-
-  // 🔥 Helper — show modal instead of alert
-  const showModal = useCallback((type, title, body = "") => {
-    setModal({ type, title, body });
-  }, []);
-
-  // ===============================
-  // UPLOAD BOX
-  // ===============================
-  const UploadBox = ({ title, type, color }) => {
-    const { getRootProps, getInputProps } = useDropzone({
-      accept:
-        type === "image" ? { "image/*": [] }
-          : type === "video" ? { "video/*": [] }
-            : { "application/pdf": [] },
-      multiple: type === "image",
-      onDrop: (acceptedFiles) => {
-        if (!acceptedFiles.length) return;
-        if (type === "image") setImages((prev) => [...prev, ...acceptedFiles].slice(0, 4));
-        if (type === "video") setVideo(acceptedFiles[0]);
-        if (type === "pdf") setPdf(acceptedFiles[0]);
-      },
-    });
-
-    return (
-      <div className="border border-gray-300 rounded overflow-hidden">
-        <div className={`${color} text-white px-4 py-2 text-[13px] font-semibold`}>{title}</div>
-        <div
-          {...getRootProps()}
-          className="bg-gray-100 text-gray-600 text-center p-3 min-h-[120px] cursor-pointer hover:bg-gray-200 transition"
-        >
-          <input {...getInputProps()} />
-
-          {type === "image" && images.length > 0 ? (
-            <div className="flex gap-2 flex-wrap justify-center">
-              {images.map((img, index) => (
-                <div key={index} className="relative">
-                  <img src={URL.createObjectURL(img)} alt="preview" className="w-16 h-16 object-cover border rounded" />
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setImages(images.filter((_, i) => i !== index)); }}
-                    className="absolute top-0 right-0 bg-red-500 text-white text-xs px-1"
-                  >✕</button>
-                </div>
-              ))}
-            </div>
-          ) : type === "video" && video ? (
-            <div>
-              <video src={URL.createObjectURL(video)} className="w-28 mx-auto" controls />
-              <button onClick={(e) => { e.stopPropagation(); setVideo(null); }} className="mt-1 text-red-500 text-xs underline block mx-auto">Remove</button>
-            </div>
-          ) : type === "pdf" && pdf ? (
-            <div>
-              <p className="text-sm">📄 {pdf.name}</p>
-              <button onClick={(e) => { e.stopPropagation(); setPdf(null); }} className="mt-1 text-red-500 text-xs underline">Remove</button>
-            </div>
-          ) : (
-            <>Drag & Drop {type} files <br /> or <span className="underline">Browse {type}</span></>
-          )}
-        </div>
-      </div>
-    );
+function tallyResults(results = []) {
+  return {
+    sent:   results.filter((r) => r.status === "sent").length,
+    failed: results.filter((r) => r.status === "failed").length,
+    nonwa:  results.filter((r) => r.status === "nonwa").length,
   };
+}
 
-  // ===============================
-  // NUMBER LIST
-  // ===============================
-  const numberList = [...new Set(numbers.split("\n").map((n) => n.trim()).filter((n) => n !== ""))];
-  const QUEUE_THRESHOLD = 50;
+async function safeFetch(url, opts = {}) {
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// ─────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────
+export default function WappCampaign() {
+  const [images,       setImages]       = useState([]);
+  const [video,        setVideo]        = useState(null);
+  const [pdf,          setPdf]          = useState(null);
+  const [campaignName, setCampaignName] = useState("");
+  const [numbers,      setNumbers]      = useState("");
+  const [message,      setMessage]      = useState("");
+  const [showConfirm,  setShowConfirm]  = useState(false);
+  const [loading,      setLoading]      = useState(false);
+  const [modal,        setModal]        = useState(null);
+
+  const showModal = useCallback((type, title, body = "") => setModal({ type, title, body }), []);
+
+  const numberList = [...new Set(
+    numbers.split("\n").map((n) => n.trim()).filter(Boolean)
+  )];
+
+  const user    = getUser();
+  const isAdmin = (user?.role || "user").toLowerCase() === "admin";
   const isLarge = !isAdmin && numberList.length > QUEUE_THRESHOLD;
 
-  // ===============================
-  // 🔥 RESET FORM
-  // ===============================
-  const resetForm = () => {
+  // ── RESET ──
+  const resetForm = useCallback(() => {
     setNumbers(""); setMessage(""); setCampaignName("");
     setImages([]); setVideo(null); setPdf(null);
-  };
+  }, []);
 
-  // ===============================
-  // 🔥 SEND CAMPAIGN
-  // ===============================
-  const sendCampaign = async () => {
+  // ── SEND ──
+  const sendCampaign = useCallback(async () => {
     if (loading) return;
     setLoading(true);
     setShowConfirm(false);
 
-    if (numberList.length === 0) {
+    if (!numberList.length) {
       showModal("error", "No Numbers!", "Please enter at least one number.");
       setLoading(false);
       return;
     }
 
     try {
-      const filesData = [
-        ...images.map((f) => ({ name: f.name, type: f.type })),
-        ...(video ? [{ name: video.name, type: video.type }] : []),
-        ...(pdf ? [{ name: pdf.name, type: pdf.type }] : []),
-      ];
+      const filesData  = buildFilesData(images, video, pdf);
+      let   campaignId = null;
 
-      let campaignId = null;
-
+      // ── STEP 1: For large batches, pre-save as "pending" ──
       if (isLarge) {
-        const pendingSave = await fetch("https://whatsappsms-olho.onrender.com/api/send-whatsapp/", {
-          method: "POST",
+        const pendingData = await safeFetch(`${API_DJANGO}/api/send-whatsapp/`, {
+          method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            results: numberList.map((n) => ({ number: n, status: "pending", files: filesData })),
+          body:    JSON.stringify({
+            results:  numberList.map((n) => ({ number: n, status: "pending", files: filesData })),
             message,
-            total: numberList.length,
-            user_id: user.id,
-            status: "pending",
+            total:    numberList.length,
+            user_id:  user.id,
+            status:   "pending",
           }),
         });
 
-        const pendingData = await pendingSave.json();
-
         if (pendingData.status === "failed") {
-          showModal("error", "Insufficient Balance ❌", pendingData.message || "You don't have enough credits to run this campaign.");
+          showModal("error", "Insufficient Balance ❌", pendingData.message || "Not enough credits.");
           setLoading(false);
           return;
         }
@@ -236,45 +213,33 @@ export default function WappCampaign() {
         }
       }
 
+      // ── STEP 2: Send to Node ──
       const formData = new FormData();
       numberList.forEach((n) => formData.append("numbers", n));
-      formData.append("message", message || "");
-      formData.append("userRole", userRole);
-      if (user?.id) formData.append("userId", user.id);
-      if (campaignId) formData.append("campaignId", campaignId);
-      if (images.length > 0) images.forEach((img) => formData.append("files", img));
+      formData.append("message",  message || "");
+      formData.append("userRole", user?.role || "user");
+      if (user?.id)    formData.append("userId",     user.id);
+      if (campaignId)  formData.append("campaignId", campaignId);
+      images.forEach((img) => formData.append("files", img));
       if (video) formData.append("files", video);
-      if (pdf) formData.append("files", pdf);
+      if (pdf)   formData.append("files", pdf);
 
-      const res = await fetch("https://wa.cloudwhatsapp.in/send-bulk", {
-        method: "POST",
-        body: formData,
-      });
+      const data = await safeFetch(`${API_NODE}/send-bulk`, { method: "POST", body: formData });
 
-      let data = {};
-      try { data = await res.json(); } catch {
-        showModal("error", "Server Error ❌", "Could not read server response. Please try again.");
-        setLoading(false);
-        return;
-      }
-
+      // ── Handle Node responses ──
       if (data.status === "blocked") {
-        showModal("warning", "Campaign Blocked ⛔",
-          "All campaigns are allowed only between\n9:00 AM – 6:00 PM.\n\nPlease try again tomorrow.");
+        showModal("warning", "Campaign Blocked ⛔", "Campaigns allowed only between\n9:00 AM – 6:00 PM.\n\nPlease try again tomorrow.");
         setLoading(false);
         return;
       }
-
       if (data.status === "no_device") {
-        showModal("error", "No Device Connected ❌",
-          "No WhatsApp device is currently connected.\n\nPlease connect a device and try again.");
+        showModal("error", "No Device Connected ❌", "No WhatsApp device is connected.\nPlease connect a device and try again.");
         setLoading(false);
         return;
       }
-
       if (data.status === "queued") {
         showModal("info", "Campaign Queued ⏳",
-          `Total Numbers: ${data.total}\n\nYour campaign will be completed in 30–50 minutes.\n\nReport me "PENDING" dikhega, complete hone ke baad "COMPLETED" ho jayega.`
+          `Total Numbers: ${data.total}\n\nYour campaign will complete in 30–50 minutes.\n\nReport mein "PENDING" dikhega — complete hone ke baad "COMPLETED" ho jayega.`
         );
         resetForm();
         setLoading(false);
@@ -287,29 +252,23 @@ export default function WappCampaign() {
         return;
       }
 
+      // ── STEP 3: Save completed campaign to Django ──
       const updatedResults = (data.results || []).map((r) => ({ ...r, files: filesData }));
 
-      const saveRes = await fetch("https://whatsappsms-olho.onrender.com/api/send-whatsapp/", {
-        method: "POST",
+      const saveData = await safeFetch(`${API_DJANGO}/api/send-whatsapp/`, {
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body:    JSON.stringify({
           results: updatedResults,
           message,
-          total: data.total || numberList.length,
+          total:   data.total || numberList.length,
           user_id: user.id,
-          status: "completed",
+          status:  "completed",
         }),
       });
 
-      let saveData = {};
-      try { saveData = await saveRes.json(); } catch {
-        showModal("error", "Save Error ❌", "Campaign sent but failed to save report.");
-        setLoading(false);
-        return;
-      }
-
       if (saveData.status === "failed") {
-        showModal("error", "Insufficient Balance ❌", saveData.message || "You don't have enough credits.");
+        showModal("error", "Insufficient Balance ❌", saveData.message || "Not enough credits.");
         setLoading(false);
         return;
       }
@@ -318,45 +277,37 @@ export default function WappCampaign() {
         sessionStorage.setItem("user", JSON.stringify({ ...user, credit: saveData.remaining_credit }));
       }
 
-      const success = Array.isArray(data.results) ? data.results.filter((r) => r.status === "sent").length : 0;
-      const failed = Array.isArray(data.results) ? data.results.filter((r) => r.status === "failed").length : 0;
-      const nonwa = Array.isArray(data.results) ? data.results.filter((r) => r.status === "nonwa").length : 0;
-
+      const t = tallyResults(data.results);
       showModal("success", "Sent Successfully 🚀",
-        `Total:    ${data.total}\nSent:     ${success}\nFailed:   ${failed}\nNon-WA:  ${nonwa}`
+        `Total:   ${data.total}\nSent:    ${t.sent}\nFailed:  ${t.failed}\nNon-WA: ${t.nonwa}`
       );
 
       resetForm();
-
       window.dispatchEvent(new Event("campaignUpdated"));
-
       window.dispatchEvent(new Event("creditUpdated"));
+
     } catch (err) {
-      console.log("ERROR:", err);
+      console.error("SEND ERROR:", err);
       showModal("error", "Unexpected Error ❌", "Something went wrong. Please try again.");
     }
 
     setLoading(false);
-  };
+  }, [loading, numberList, images, video, pdf, message, user, isLarge, showModal, resetForm]);
 
-  // ===============================
-  // HANDLE SEND CLICK
-  // ===============================
-  const handleSendClick = () => {
-    if (!campaignName || !numbers || !message) {
+  const handleSendClick = useCallback(() => {
+    if (!campaignName.trim() || !numbers.trim() || !message.trim()) {
       showModal("warning", "Fill All Fields ⚠️", "Please enter Campaign Name, Numbers, and Message before sending.");
       return;
     }
     setShowConfirm(true);
-  };
+  }, [campaignName, numbers, message, showModal]);
 
-  // ===============================
+  // ─────────────────────────────────────────────
   // RENDER
-  // ===============================
+  // ─────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#f1f1f1] relative">
 
-      {/* TOP MARQUEE */}
       <div className="bg-gray-200">
         <marquee className="text-red-600 py-2 text-[18px]">
           NOTE = All campaigns will be delivered Between 9A.M to 6P.M - (Monday to Saturday)
@@ -366,7 +317,6 @@ export default function WappCampaign() {
       <div className="camp-wrap">
         <div className="bg-white border border-gray-300 rounded">
 
-          {/* HEADER */}
           <div className="px-4 py-3 text-[18px] font-semibold text-gray-800 bg-[#f0f3f5] flex items-center gap-2">
             <FaComments /> Wapp Message
           </div>
@@ -385,7 +335,6 @@ export default function WappCampaign() {
               />
             </div>
 
-            {/* MAIN GRID */}
             <div className="camp-grid">
 
               {/* LEFT — NUMBERS */}
@@ -394,6 +343,7 @@ export default function WappCampaign() {
                 <textarea
                   value={numbers}
                   onChange={(e) => setNumbers(e.target.value)}
+                  placeholder="One number per line"
                   className="camp-textarea border border-green-400 rounded px-2 py-2 text-[13px] outline-none resize-none"
                 />
               </div>
@@ -408,51 +358,60 @@ export default function WappCampaign() {
                 />
 
                 <UploadBox
-                  title="Image (Max file size 1 MB.) Images (Maximum 4)"
-                  type="image"
-                  color="bg-[#63C2DE]"
-                  files={images}
-                  onUpload={setImages}
-                  onError={(msg) => showModal("error", "Upload Error ❌", msg)}
+                  title="Image (Max 1 MB · Max 4 images)"
+                  type="image" color="bg-[#63C2DE]"
+                  images={images} video={video} pdf={pdf}
+                  setImages={setImages} setVideo={setVideo} setPdf={setPdf}
                 />
+
                 <div className="flex gap-3 mt-2">
                   <div className="w-1/2 h-[130px] overflow-hidden">
                     <UploadBox
-                      title="Video Upload (Max file size 3 MB.)"
-                      type="video"
-                      color="bg-[#4DBD74]"
-                      file={video}
-                      onUpload={setVideo}
-                      onError={(msg) => showModal("error", "Upload Error ❌", msg)}
-                    />                  </div>
+                      title="Video Upload (Max 3 MB)"
+                      type="video" color="bg-[#4DBD74]"
+                      images={images} video={video} pdf={pdf}
+                      setImages={setImages} setVideo={setVideo} setPdf={setPdf}
+                    />
+                  </div>
                   <div className="w-1/2 h-[130px] overflow-hidden">
                     <UploadBox
-                      title="PDF (Max file size 1 MB.)"
-                      type="pdf"
-                      color="bg-[#F86C6B]"
-                      file={pdf}
-                      onUpload={setPdf}
-                      onError={(msg) => showModal("error", "Upload Error ❌", msg)}
-                    />                  </div>
+                      title="PDF (Max 1 MB)"
+                      type="pdf" color="bg-[#F86C6B]"
+                      images={images} video={video} pdf={pdf}
+                      setImages={setImages} setVideo={setVideo} setPdf={setPdf}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* SEND BUTTON */}
+            {/* NUMBER COUNT BADGE */}
+            {numberList.length > 0 && (
+              <p className="mt-2 text-sm text-gray-500">
+                📋 {numberList.length} unique number{numberList.length !== 1 ? "s" : ""}
+                {isLarge && <span className="ml-2 text-orange-500 font-medium">⏳ Will be queued</span>}
+              </p>
+            )}
+
             <button
               type="button"
               onClick={handleSendClick}
               disabled={loading}
-              className="mt-4 bg-[#20A8D8] hover:bg-[#1b8db8] text-white px-7 py-3 disabled:opacity-50 rounded-b-md"
+              className="mt-4 bg-[#20A8D8] hover:bg-[#1b8db8] text-white px-7 py-3 disabled:opacity-50 rounded-b-md transition-colors"
             >
-              {loading ? "Sending..." : "Send Now"}
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Sending...
+                </span>
+              ) : "Send Now"}
             </button>
 
           </div>
         </div>
       </div>
 
-      {/* ✅ CONFIRM MODAL */}
+      {/* CONFIRM MODAL */}
       {showConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl w-[92%] max-w-[380px] p-6 text-center">
@@ -488,10 +447,8 @@ export default function WappCampaign() {
         </div>
       )}
 
-      {/* 🔥 CUSTOM ALERT MODAL */}
       <Modal modal={modal} onClose={() => setModal(null)} />
 
-      {/* RESPONSIVE CSS */}
       <style>{`
         .camp-wrap { padding: 24px; }
         .camp-name-row { display: flex; margin-bottom: 20px; flex-wrap: wrap; gap: 0; }
@@ -500,17 +457,14 @@ export default function WappCampaign() {
         .camp-left { width: 25%; }
         .camp-right { width: 75%; }
         .camp-textarea { width: 100%; height: 500px; }
-
         @media (max-width: 900px) {
           .camp-wrap { padding: 12px; }
           .camp-grid { flex-direction: column; }
-          .camp-left { width: 100%; }
-          .camp-right { width: 100%; }
+          .camp-left, .camp-right { width: 100%; }
           .camp-textarea { height: 180px; }
           .camp-name-input { width: 100%; flex: 1; }
           .camp-name-row { flex-wrap: nowrap; }
         }
-
         @media (max-width: 480px) {
           .camp-wrap { padding: 8px; }
           .camp-name-row { flex-direction: column; }

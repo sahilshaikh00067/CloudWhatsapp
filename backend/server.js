@@ -1,11 +1,20 @@
-const express = require("express");
-const cors = require("cors");
+/**
+ * ╔══════════════════════════════════════════════════════════════╗
+ * ║         WhatsApp Bulk Sender — Production Grade v2           ║
+ * ║   Multi-device · Lock-free batching · Health-scored routing  ║
+ * ╚══════════════════════════════════════════════════════════════╝
+ */
+
+"use strict";
+
+const express                         = require("express");
+const cors                            = require("cors");
 const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
-const qrcode = require("qrcode");
-const multer = require("multer");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
+const qrcode                          = require("qrcode");
+const multer                          = require("multer");
+const fs                              = require("fs");
+const path                            = require("path");
+const os                              = require("os");
 
 const app = express();
 app.use(cors());
@@ -13,141 +22,229 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use("/uploads", express.static("uploads"));
 
-// ── CONFIG ────────────────────────────────────
-const PORT = process.env.PORT || 5000;
-const MAX_DEVICES = parseInt(process.env.MAX_DEVICES || "100");
-const NODE_ID = process.env.NODE_ID || "node1";
+// ─────────────────────────────────────────────────────────────────
+// CONFIG — tweak these without touching logic
+// ─────────────────────────────────────────────────────────────────
+const CFG = Object.freeze({
+  PORT:               Number(process.env.PORT)        || 5000,
+  MAX_DEVICES:        Number(process.env.MAX_DEVICES) || 100,
+  NODE_ID:            process.env.NODE_ID             || "node1",
 
-// 🔥 SPEED + STABILITY TUNING
-const SENDS_PER_DEVICE   = 1;     // ⚠️ CRITICAL: 1 send at a time per device — prevents getChat crash
-const BATCH_DELAY_MS     = 2000;  // ms between batches
-const NEXT_JOB_DELAY_MS  = 8000;  // ms between jobs
-const WA_CHECK_TIMEOUT   = 3000;  // ms for isRegisteredUser
-const MSG_FILE_GAP_MS    = 500;   // ms between message and file
-const FILE_FILE_GAP_MS   = 400;   // ms between files
-const RATE_LIMIT         = 18;    // per device per minute
-const RATE_WINDOW        = 60000;
-const SEND_TIMEOUT_MS    = 30000; // max ms for one sendMessage call
-const PROTOCOL_TIMEOUT   = 120000;// puppeteer protocol timeout
+  // Per-device concurrency: 1 = safest (no getChat race), 2 = faster if devices are stable
+  SENDS_PER_DEVICE:   1,
 
-// ── STORAGE ───────────────────────────────────
-const clients       = {};
-const qrCodes       = {};
-const readyMap      = {};
-const infoMap       = {};
-const retryCountMap = {};
-const sendStats     = {};
+  // Queue / batching
+  BATCH_DELAY_MS:     1500,     // between batches (was 2000)
+  NEXT_JOB_DELAY_MS:  6000,     // between jobs   (was 8000)
 
-// 🔥 Per-device send lock — prevents concurrent sends on same device
-const deviceLocks   = {};
+  // Timeouts
+  WA_CHECK_MS:        2500,     // isRegisteredUser  (was 3000)
+  SEND_TIMEOUT_MS:    25000,    // one sendMessage   (was 30000)
+  PROTOCOL_TIMEOUT:   120000,   // puppeteer CDP
 
-// ── QUEUE ─────────────────────────────────────
-const pendingQueue  = [];
-let queueRunning    = false;
+  // Gaps between sends (anti-spam rhythm)
+  MSG_FILE_GAP_MS:    400,
+  FILE_FILE_GAP_MS:   300,
 
-// ── FILE UPLOAD ───────────────────────────────
-["uploads", "sessions"].forEach((d) => !fs.existsSync(d) && fs.mkdirSync(d));
+  // Rate limiting
+  RATE_LIMIT:         20,       // sends/device/minute (was 18)
+  RATE_WINDOW_MS:     60_000,
 
+  // Health / retry
+  MAX_RETRIES:        5,
+  RETRY_BASE_MS:      4000,
+  RETRY_MAX_MS:       60_000,
+
+  // File cache
+  FILE_CACHE_MAX:     80,       // entries (was 50)
+  UPLOAD_TTL_MS:      6 * 3_600_000,
+
+  // Working hours guard (IST = UTC+5:30)
+  WORK_START_H:       9,
+  WORK_END_H:         18,
+});
+
+// ─────────────────────────────────────────────────────────────────
+// DIRECTORIES
+// ─────────────────────────────────────────────────────────────────
+["uploads", "sessions"].forEach((d) => fs.existsSync(d) || fs.mkdirSync(d, { recursive: true }));
+
+// ─────────────────────────────────────────────────────────────────
+// STATE  (all Maps for O(1) lookup)
+// ─────────────────────────────────────────────────────────────────
+const clients       = new Map(); // deviceId → Client
+const qrStore       = new Map(); // deviceId → dataURL
+const readyMap      = new Map(); // deviceId → bool
+const infoMap       = new Map(); // deviceId → { wid, pushname, ... }
+const retryMap      = new Map(); // deviceId → retryCount
+const sendStats     = new Map(); // deviceId → { count, windowStart }
+const deviceLocks   = new Map(); // deviceId → Promise|null (mutex)
+const deviceScores  = new Map(); // deviceId → { sent, failed } health score
+
+// ─────────────────────────────────────────────────────────────────
+// QUEUE
+// ─────────────────────────────────────────────────────────────────
+/** @type {Array<Job>} */
+const jobQueue  = [];
+let   queueBusy = false;
+
+// ─────────────────────────────────────────────────────────────────
+// FILE UPLOAD
+// ─────────────────────────────────────────────────────────────────
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (_, __, cb) => cb(null, "uploads/"),
-    filename:    (_, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
+    destination: (_req, _file, cb) => cb(null, "uploads/"),
+    filename:    (_req, file, cb)  => cb(null, `${Date.now()}_${file.originalname}`),
   }),
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-// ── HELPERS ───────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// UTILITIES
+// ─────────────────────────────────────────────────────────────────
 const sleep  = (ms) => new Promise((r) => setTimeout(r, ms));
-const jitter = (base, v) => base + Math.random() * v;
+const jitter = (base, variance) => base + Math.random() * variance;
 
-function normalizeNumber(number) {
-  let num = number.trim().replace(/\D/g, "");
-  if (!num.startsWith("91")) num = "91" + num;
-  return num + "@c.us";
+/**
+ * Normalise to Indian WhatsApp chat ID.
+ * Strips non-digits, prepends 91 if absent.
+ */
+function normalizeNumber(raw) {
+  let n = raw.trim().replace(/\D/g, "");
+  if (!n.startsWith("91")) n = "91" + n;
+  return n + "@c.us";
 }
 
+/**
+ * IST working hours check (UTC+5:30).
+ * Avoids hitting carriers during night — reduces ban risk.
+ */
 function isWorkingHours() {
-  const h = new Date().getHours();
-  return h >= 9 && h < 18;
+  const now = new Date();
+  // IST offset: 330 minutes ahead of UTC
+  const istH = (now.getUTCHours() + 5 + Math.floor((now.getUTCMinutes() + 30) / 60)) % 24;
+  return istH >= CFG.WORK_START_H && istH < CFG.WORK_END_H;
 }
 
-function getMemoryUsageMB() {
-  return Math.round(process.memoryUsage().rss / 1024 / 1024);
-}
+function memMB() { return Math.round(process.memoryUsage().rss / 1_048_576); }
 
-function log(msg) {
-  const time = new Date().toTimeString().slice(0, 8);
-  console.log(`[${time}] ${msg}`);
-}
+const log = (() => {
+  const fmt = new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  });
+  return (msg) => console.log(`[${fmt.format(new Date())}] ${msg}`);
+})();
 
-// ── 🔥 CLIENT HEALTH CHECK ────────────────────
-// Yeh function check karta hai ki client actually alive hai ya sirf readyMap mein hai
-function isClientAlive(deviceId) {
-  const client = clients[deviceId];
-  if (!client) return false;
-  if (!readyMap[deviceId]) return false;
+// ─────────────────────────────────────────────────────────────────
+// DEVICE HEALTH
+// ─────────────────────────────────────────────────────────────────
 
-  // whatsapp-web.js internal pupeteer page check
+/** True only if the puppeteer page is still alive AND we think we're ready. */
+function isAlive(deviceId) {
+  if (!readyMap.get(deviceId)) return false;
+  const c = clients.get(deviceId);
+  if (!c) return false;
   try {
-    const page = client.pupPage;
+    const page = c.pupPage;
     if (!page || page.isClosed()) {
-      log(`⚠️ Dead page detected: ${deviceId} — marking offline`);
-      readyMap[deviceId] = false;
+      log(`⚠️  Dead page: ${deviceId} — marking offline`);
+      readyMap.set(deviceId, false);
       return false;
     }
   } catch {
-    readyMap[deviceId] = false;
+    readyMap.set(deviceId, false);
     return false;
   }
-
   return true;
 }
 
-function getReadyDeviceIds() {
-  return Object.keys(clients).filter((id) => isClientAlive(id));
-}
-
-// ── 🔥 DEVICE LOCK — prevent concurrent sends ─
-async function acquireLock(deviceId) {
-  while (deviceLocks[deviceId]) {
-    await sleep(100);
+/** Returns live device IDs sorted best→worst by health score. */
+function readyDevices() {
+  const ids = [];
+  for (const [id] of clients) {
+    if (isAlive(id)) ids.push(id);
   }
-  deviceLocks[deviceId] = true;
+  // Sort by success rate descending — best device gets first picks
+  ids.sort((a, b) => {
+    const sa = scoreOf(a), sb = scoreOf(b);
+    return sb - sa;
+  });
+  return ids;
 }
 
-function releaseLock(deviceId) {
-  deviceLocks[deviceId] = false;
+function scoreOf(deviceId) {
+  const s = deviceScores.get(deviceId);
+  if (!s || s.sent + s.failed === 0) return 1;
+  return s.sent / (s.sent + s.failed);
 }
 
-// ── FILE CACHE ────────────────────────────────
-const fileCache    = new Map();
-const FILE_CACHE_MAX = 50;
+function recordResult(deviceId, success) {
+  const s = deviceScores.get(deviceId) || { sent: 0, failed: 0 };
+  success ? s.sent++ : s.failed++;
+  deviceScores.set(deviceId, s);
+}
 
-async function getFileBase64(filePath) {
-  if (fileCache.has(filePath)) return fileCache.get(filePath);
-  if (fileCache.size >= FILE_CACHE_MAX) fileCache.delete(fileCache.keys().next().value);
-  const data = await fs.promises.readFile(filePath, { encoding: "base64" });
+// ─────────────────────────────────────────────────────────────────
+// MUTEX — zero-contention per-device lock (Promise chaining)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Acquire exclusive lock for a device.
+ * Returns a release() function.
+ */
+async function acquireLock(deviceId) {
+  let release;
+  const next = new Promise((resolve) => { release = resolve; });
+  const prev = deviceLocks.get(deviceId) ?? Promise.resolve();
+  deviceLocks.set(deviceId, prev.then(() => next));
+  await prev;
+  return release;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// FILE CACHE — LRU-ish Map (insertion-order deletion)
+// ─────────────────────────────────────────────────────────────────
+const fileCache = new Map();
+
+async function cachedBase64(filePath) {
+  if (fileCache.has(filePath)) {
+    // Refresh order (move to end)
+    const v = fileCache.get(filePath);
+    fileCache.delete(filePath);
+    fileCache.set(filePath, v);
+    return v;
+  }
+  if (fileCache.size >= CFG.FILE_CACHE_MAX) {
+    fileCache.delete(fileCache.keys().next().value);
+  }
+  const data = await fs.promises.readFile(filePath, "base64");
   fileCache.set(filePath, data);
   return data;
 }
 
-async function prewarmFileCache(files) {
+async function prewarm(files) {
   if (!files?.length) return;
-  await Promise.all(files.map((f) => getFileBase64(f.path).catch(() => {})));
+  await Promise.allSettled(files.map((f) => cachedBase64(f.path)));
 }
 
-// ── CLEANUP UPLOADS ───────────────────────────
-setInterval(() => {
-  try {
-    const now = Date.now();
-    fs.readdirSync("./uploads").forEach((file) => {
-      const fp = path.join("./uploads", file);
-      if (now - fs.statSync(fp).mtimeMs > 6 * 3600000) fs.unlinkSync(fp);
-    });
-  } catch {}
-}, 3600000);
+// ─────────────────────────────────────────────────────────────────
+// RATE LIMITER
+// ─────────────────────────────────────────────────────────────────
+function canSend(deviceId) {
+  const now  = Date.now();
+  let   stat = sendStats.get(deviceId);
+  if (!stat || now - stat.windowStart > CFG.RATE_WINDOW_MS) {
+    stat = { count: 0, windowStart: now };
+    sendStats.set(deviceId, stat);
+  }
+  if (stat.count >= CFG.RATE_LIMIT) return false;
+  stat.count++;
+  return true;
+}
 
-// ── MIME HELPERS ──────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// MIME HELPERS
+// ─────────────────────────────────────────────────────────────────
 const DOC_MIMES = new Set([
   "application/pdf",
   "application/msword",
@@ -157,37 +254,39 @@ const DOC_MIMES = new Set([
   "text/plain",
   "application/zip",
 ]);
-const isDocument = (mime) => DOC_MIMES.has(mime);
+const isDoc = (mime) => DOC_MIMES.has(mime);
 
-// ── RATE LIMITER ──────────────────────────────
-function canSend(deviceId) {
-  const now = Date.now();
-  if (!sendStats[deviceId]) sendStats[deviceId] = { count: 0, windowStart: now };
-  const stat = sendStats[deviceId];
-  if (now - stat.windowStart > RATE_WINDOW) { stat.count = 0; stat.windowStart = now; }
-  if (stat.count >= RATE_LIMIT) return false;
-  stat.count++;
-  return true;
+// ─────────────────────────────────────────────────────────────────
+// TIMEOUT WRAPPER
+// ─────────────────────────────────────────────────────────────────
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`TIMEOUT_${ms}`)), ms);
+    promise.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
 }
 
-// ── CREATE DEVICE ─────────────────────────────
-const MAX_RETRIES = 5;
-
+// ─────────────────────────────────────────────────────────────────
+// CREATE DEVICE
+// ─────────────────────────────────────────────────────────────────
 async function createDevice(deviceId) {
-  if (clients[deviceId]) return;
-  if (Object.keys(clients).length >= MAX_DEVICES) {
-    log(`⚠️ Max devices (${MAX_DEVICES}) reached`);
+  if (clients.has(deviceId)) return;
+  if (clients.size >= CFG.MAX_DEVICES) {
+    log(`⚠️  Max devices (${CFG.MAX_DEVICES}) reached`);
     return;
   }
 
-  retryCountMap[deviceId] = retryCountMap[deviceId] || 0;
-  if (retryCountMap[deviceId] >= MAX_RETRIES) {
-    log(`❌ Max retries for ${deviceId}`);
-    retryCountMap[deviceId] = 0;
+  const retries = retryMap.get(deviceId) || 0;
+  if (retries >= CFG.MAX_RETRIES) {
+    log(`❌ Max retries for ${deviceId} — giving up`);
+    retryMap.set(deviceId, 0);
     return;
   }
 
-  log(`📱 Creating: ${deviceId} | RAM: ${getMemoryUsageMB()}MB`);
+  log(`📱 Creating: ${deviceId} [retry ${retries}] | RAM: ${memMB()}MB`);
 
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: deviceId, dataPath: "./sessions" }),
@@ -211,496 +310,540 @@ async function createDevice(deviceId) {
         "--js-flags=--max-old-space-size=256",
         "--disable-web-security",
         "--disable-software-rasterizer",
+        "--disable-background-timer-throttling",  // 🔥 faster timers in bg tabs
+        "--disable-renderer-backgrounding",       // 🔥 keep renderer active
       ],
-      timeout: 90000,
-      protocolTimeout: PROTOCOL_TIMEOUT,  // 🔥 120s — fixes Runtime.callFunctionOn timeout
+      timeout:         90_000,
+      protocolTimeout: CFG.PROTOCOL_TIMEOUT,
     },
     takeoverOnConflict: true,
-    takeoverTimeoutMs:  5000,
+    takeoverTimeoutMs:  3000,   // 🔥 faster takeover (was 5000)
     restartOnAuthFail:  true,
   });
 
-  clients[deviceId]        = client;
-  readyMap[deviceId]       = false;
-  deviceLocks[deviceId]    = false;
+  clients.set(deviceId, client);
+  readyMap.set(deviceId, false);
+  deviceScores.set(deviceId, { sent: 0, failed: 0 });
 
+  // ── QR ──
   client.on("qr", async (qr) => {
     try {
-      qrCodes[deviceId] = await qrcode.toDataURL(qr, {
-        errorCorrectionLevel: "L", scale: 5, margin: 1,
-      });
-      readyMap[deviceId] = false;
+      // 🔥 Generate QR immediately with minimal options
+      qrStore.set(deviceId, await qrcode.toDataURL(qr, {
+        errorCorrectionLevel: "L",
+        scale:  5,
+        margin: 1,
+      }));
+      readyMap.set(deviceId, false);
       log(`📲 QR ready: ${deviceId}`);
-    } catch {}
+    } catch (e) {
+      log(`QR gen error ${deviceId}: ${e.message}`);
+    }
   });
 
+  // ── AUTH ──
   client.on("authenticated", () => {
-    qrCodes[deviceId]       = "";
-    retryCountMap[deviceId] = 0;
+    qrStore.delete(deviceId);
+    retryMap.set(deviceId, 0);
     log(`🔐 Authenticated: ${deviceId}`);
   });
 
-  client.on("ready", async () => {
-    readyMap[deviceId]      = true;
-    retryCountMap[deviceId] = 0;
-    deviceLocks[deviceId]   = false;
+  // ── READY ──
+  client.on("ready", () => {
+    readyMap.set(deviceId, true);
+    retryMap.set(deviceId, 0);
     const info = client.info;
-    infoMap[deviceId] = {
+    infoMap.set(deviceId, {
       wid:         info?.wid,
       pushname:    info?.pushname,
       connectedAt: new Date().toISOString(),
-      node:        NODE_ID,
-    };
-    log(`✅ Ready: ${deviceId} → ${info?.wid?.user} | RAM: ${getMemoryUsageMB()}MB`);
+      node:        CFG.NODE_ID,
+    });
+    log(`✅ Ready: ${deviceId} → ${info?.wid?.user} | RAM: ${memMB()}MB`);
   });
 
+  // ── AUTH FAIL ──
   client.on("auth_failure", () => {
-    readyMap[deviceId]    = false;
-    deviceLocks[deviceId] = false;
-    log(`❌ Auth fail: ${deviceId}`);
+    readyMap.set(deviceId, false);
+    log(`❌ Auth failure: ${deviceId}`);
   });
 
+  // ── DISCONNECTED ──
   client.on("disconnected", async (reason) => {
-    readyMap[deviceId]    = false;
-    deviceLocks[deviceId] = false;
-    log(`⚠️ Disconnected: ${deviceId} (${reason})`);
+    readyMap.set(deviceId, false);
+    log(`⚠️  Disconnected: ${deviceId} (${reason})`);
 
     if (reason === "LOGOUT") {
-      delete clients[deviceId];
-      delete infoMap[deviceId];
-      delete qrCodes[deviceId];
-      delete retryCountMap[deviceId];
-      delete deviceLocks[deviceId];
+      purgeDevice(deviceId, true);
       return;
     }
 
-    try { await client.destroy(); } catch {}
-    delete clients[deviceId];
-    delete infoMap[deviceId];
+    await destroyQuietly(client);
+    clients.delete(deviceId);
+    infoMap.delete(deviceId);
 
-    retryCountMap[deviceId] = (retryCountMap[deviceId] || 0) + 1;
-    const delay = Math.min(5000 * retryCountMap[deviceId], 60000);
-    setTimeout(() => createDevice(deviceId), delay);
+    scheduleReconnect(deviceId);
   });
 
+  // ── INIT ──
   try {
     await client.initialize();
   } catch (err) {
     log(`Init error ${deviceId}: ${err.message}`);
-    delete clients[deviceId];
-    retryCountMap[deviceId] = (retryCountMap[deviceId] || 0) + 1;
-    const delay = Math.min(5000 * retryCountMap[deviceId], 60000);
-    setTimeout(() => createDevice(deviceId), delay);
+    clients.delete(deviceId);
+    scheduleReconnect(deviceId);
   }
 }
 
-// ── 🔥 SAFE SEND WITH TIMEOUT WRAPPER ────────
-async function withTimeout(promise, ms, fallback) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`TIMEOUT_${ms}ms`)), ms);
-  });
-  try {
-    const result = await Promise.race([promise, timeout]);
-    clearTimeout(timer);
-    return result;
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
+function scheduleReconnect(deviceId) {
+  const r = (retryMap.get(deviceId) || 0) + 1;
+  retryMap.set(deviceId, r);
+  const delay = Math.min(CFG.RETRY_BASE_MS * r + Math.random() * 1000, CFG.RETRY_MAX_MS);
+  log(`🔁 Reconnect ${deviceId} in ${Math.round(delay / 1000)}s (attempt ${r})`);
+  setTimeout(() => createDevice(deviceId), delay);
+}
+
+function purgeDevice(deviceId, deleteSession = false) {
+  clients.delete(deviceId);
+  readyMap.delete(deviceId);
+  infoMap.delete(deviceId);
+  qrStore.delete(deviceId);
+  retryMap.delete(deviceId);
+  sendStats.delete(deviceId);
+  deviceScores.delete(deviceId);
+  deviceLocks.delete(deviceId);
+  if (deleteSession) {
+    const sp = path.join("./sessions/.wwebjs_auth", `session-${deviceId}`);
+    if (fs.existsSync(sp)) fs.rmSync(sp, { recursive: true, force: true });
   }
 }
 
-// ── 🔥 SEND TO ONE NUMBER ─────────────────────
-async function sendToNumber(client, deviceId, number, message, files) {
-  const chatId = normalizeNumber(number);
+async function destroyQuietly(client) {
+  try { await client.destroy(); } catch {}
+}
 
-  // 🔥 Double-check client is alive before sending
-  if (!isClientAlive(deviceId)) {
-    log(`⚠️ Skipping ${number} — device ${deviceId} not alive`);
+// ─────────────────────────────────────────────────────────────────
+// SEND TO ONE NUMBER
+// ─────────────────────────────────────────────────────────────────
+async function sendToNumber(deviceId, number, message, files) {
+  const client = clients.get(deviceId);
+  if (!client || !isAlive(deviceId)) {
     return { number, status: "failed", reason: "device_offline" };
   }
 
-  // Rate limit
-  if (!canSend(deviceId)) await sleep(1000);
+  // Soft rate-limit — just wait briefly instead of hard-failing
+  if (!canSend(deviceId)) await sleep(1200);
 
-  // 🔥 Acquire lock — only 1 send at a time per device
-  await acquireLock(deviceId);
+  const chatId  = normalizeNumber(number);
+  const release = await acquireLock(deviceId);
 
   try {
-    // 🔥 WA check with short timeout
-    let isRegistered = true;
+    // ── WA registration check ──
+    let registered = true;
     try {
-      isRegistered = await withTimeout(
+      registered = await withTimeout(
         client.isRegisteredUser(chatId),
-        WA_CHECK_TIMEOUT,
-        true
+        CFG.WA_CHECK_MS,
       );
     } catch {
-      isRegistered = true; // assume registered on timeout — dont skip
+      // timeout → assume registered, don't skip
     }
 
-    if (!isRegistered) {
-      releaseLock(deviceId);
+    if (!registered) {
+      release();
+      recordResult(deviceId, false);
       return { number, status: "nonwa" };
     }
 
-    // 🔥 Send message with timeout
+    // ── Send text ──
     if (message?.trim()) {
       await withTimeout(
         client.sendMessage(chatId, message.trim()),
-        SEND_TIMEOUT_MS,
-        null
+        CFG.SEND_TIMEOUT_MS,
       );
     }
 
-    // Files
+    // ── Send files ──
     if (files?.length) {
-      if (message?.trim()) await sleep(MSG_FILE_GAP_MS);
+      if (message?.trim()) await sleep(CFG.MSG_FILE_GAP_MS);
 
       for (let i = 0; i < files.length; i++) {
-        const file     = files[i];
-        const fileData = await getFileBase64(file.path);
-        const mime     = file.mimetype || "application/octet-stream";
-        const media    = new MessageMedia(mime, fileData, file.originalname);
+        const file  = files[i];
+        const data  = await cachedBase64(file.path);
+        const mime  = file.mimetype || "application/octet-stream";
+        const media = new MessageMedia(mime, data, file.originalname);
 
         await withTimeout(
-          client.sendMessage(chatId, media, { sendMediaAsDocument: isDocument(mime) }),
-          SEND_TIMEOUT_MS,
-          null
+          client.sendMessage(chatId, media, { sendMediaAsDocument: isDoc(mime) }),
+          CFG.SEND_TIMEOUT_MS,
         );
 
-        if (i < files.length - 1) await sleep(FILE_FILE_GAP_MS);
+        if (i < files.length - 1) await sleep(CFG.FILE_FILE_GAP_MS);
       }
     }
 
-    releaseLock(deviceId);
+    release();
+    recordResult(deviceId, true);
     return { number, status: "sent" };
 
   } catch (err) {
-    releaseLock(deviceId);
-    const msg = err.message || "";
-
-    // 🔥 Detect dead client errors
-    if (
-      msg.includes("getChat") ||
-      msg.includes("Cannot read properties of undefined") ||
-      msg.includes("Execution context was destroyed") ||
-      msg.includes("Session closed") ||
-      msg.includes("Target closed")
-    ) {
-      log(`💀 Dead client detected: ${deviceId} — marking offline`);
-      readyMap[deviceId] = false;
-      // Trigger reconnect
-      setTimeout(async () => {
-        try { await clients[deviceId]?.destroy(); } catch {}
-        delete clients[deviceId];
-        delete infoMap[deviceId];
-        retryCountMap[deviceId] = (retryCountMap[deviceId] || 0) + 1;
-        const delay = Math.min(5000 * retryCountMap[deviceId], 60000);
-        setTimeout(() => createDevice(deviceId), delay);
-      }, 1000);
-      return { number, status: "failed", reason: "device_crashed" };
-    }
-
-    if (
-      msg.includes("invalid wid") ||
-      msg.toLowerCase().includes("invalid wid")
-    ) {
-      return { number, status: "nonwa" };
-    }
-
-    if (msg.includes("TIMEOUT_")) {
-      log(`⏱️ Send timeout ${number} on ${deviceId}`);
-      // Mark device as slow — reduce its lock for a bit
-      await sleep(2000);
-      return { number, status: "failed", reason: "timeout" };
-    }
-
-    if (msg.includes("Runtime.callFunctionOn timed out")) {
-      log(`⏱️ Protocol timeout on ${deviceId} — backing off`);
-      readyMap[deviceId] = false;
-      setTimeout(() => { readyMap[deviceId] = isClientAlive(deviceId); }, 15000);
-      return { number, status: "failed", reason: "protocol_timeout" };
-    }
-
-    log(`❌ Send failed ${number}: ${msg.slice(0, 80)}`);
-    return { number, status: "failed", reason: "send_error" };
+    release();
+    recordResult(deviceId, false);
+    return handleSendError(deviceId, number, err);
   }
 }
 
-// ── 🔥 QUEUE PROCESSOR ────────────────────────
-async function processQueue() {
-  if (queueRunning || !pendingQueue.length) return;
-  queueRunning = true;
+function handleSendError(deviceId, number, err) {
+  const msg = err?.message || "";
 
-  while (pendingQueue.length > 0) {
-    const job = pendingQueue[0];
-    if (job.status === "cancelled") { pendingQueue.shift(); continue; }
+  // Dead browser / page crash
+  if (
+    msg.includes("getChat") ||
+    msg.includes("Cannot read properties of undefined") ||
+    msg.includes("Execution context was destroyed") ||
+    msg.includes("Session closed") ||
+    msg.includes("Target closed")
+  ) {
+    log(`💀 Dead client: ${deviceId} — scheduling reconnect`);
+    readyMap.set(deviceId, false);
+    setTimeout(async () => {
+      const c = clients.get(deviceId);
+      clients.delete(deviceId);
+      infoMap.delete(deviceId);
+      await destroyQuietly(c);
+      scheduleReconnect(deviceId);
+    }, 500);
+    return { number, status: "failed", reason: "device_crashed" };
+  }
+
+  if (msg.toLowerCase().includes("invalid wid")) {
+    return { number, status: "nonwa" };
+  }
+
+  if (msg.includes("TIMEOUT_")) {
+    log(`⏱️  Send timeout ${number} on ${deviceId}`);
+    return { number, status: "failed", reason: "timeout" };
+  }
+
+  if (msg.includes("Runtime.callFunctionOn timed out")) {
+    log(`⏱️  Protocol timeout ${deviceId} — cooling 15s`);
+    readyMap.set(deviceId, false);
+    setTimeout(() => { readyMap.set(deviceId, isAlive(deviceId)); }, 15_000);
+    return { number, status: "failed", reason: "protocol_timeout" };
+  }
+
+  log(`❌ Send fail ${number} [${deviceId}]: ${msg.slice(0, 100)}`);
+  return { number, status: "failed", reason: "send_error" };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// QUEUE PROCESSOR
+// ─────────────────────────────────────────────────────────────────
+async function processQueue() {
+  if (queueBusy || !jobQueue.length) return;
+  queueBusy = true;
+
+  while (jobQueue.length) {
+    const job = jobQueue[0];
+
+    if (job.status === "cancelled") { jobQueue.shift(); continue; }
 
     job.status    = "running";
     job.startedAt = new Date().toISOString();
+    job.results   = job.results || [];
 
-    let deviceIds = getReadyDeviceIds();
-    if (!deviceIds.length) {
-      log("⚠️ No devices ready. Waiting 10s...");
+    // Wait for a live device
+    let devices = readyDevices();
+    while (!devices.length) {
+      log("⚠️  No ready devices — waiting 10s...");
       job.status = "pending";
-      await sleep(10000);
-      continue;
+      await sleep(10_000);
+      devices = readyDevices();
     }
+    job.status = "running";
 
-    await prewarmFileCache(job.files);
+    await prewarm(job.files);
 
-    const results            = [];
     const { numbers, message, files } = job;
+    // 🔥 Batch size scales with device count but caps at SENDS_PER_DEVICE per device
+    const BATCH = Math.max(devices.length * CFG.SENDS_PER_DEVICE, 1);
 
-    // 🔥 BATCH_SIZE = number of ready devices × SENDS_PER_DEVICE
-    // With SENDS_PER_DEVICE=1, each device handles exactly 1 number at a time
-    const BATCH_SIZE = Math.max(deviceIds.length * SENDS_PER_DEVICE, 1);
-    log(`🚀 Job ${job.id}: ${numbers.length} nums | ${deviceIds.length} devices | batch ${BATCH_SIZE}`);
+    log(`🚀 Job ${job.id}: ${numbers.length} nums | ${devices.length} devices | batch ${BATCH}`);
 
-    for (let i = 0; i < numbers.length; i += BATCH_SIZE) {
+    for (let i = 0; i < numbers.length; i += BATCH) {
       if (job.status === "cancelled") break;
 
-      const batch         = numbers.slice(i, i + BATCH_SIZE);
-      const activeDevices = getReadyDeviceIds(); // re-check every batch
+      const batch   = numbers.slice(i, i + BATCH);
+      const active  = readyDevices();
 
-      if (!activeDevices.length) {
-        log("⚠️ All devices offline. Waiting 15s...");
-        await sleep(15000);
-        i -= BATCH_SIZE;
+      if (!active.length) {
+        log("⚠️  All devices offline — waiting 15s...");
+        await sleep(15_000);
+        i -= BATCH;
         continue;
       }
 
-      // 🔥 Each number goes to a different device — no concurrent sends on same device
-      const batchResults = await Promise.allSettled(
-        batch.map(async (number, idx) => {
-          const deviceId = activeDevices[idx % activeDevices.length];
-          const client   = clients[deviceId];
-
-          if (!isClientAlive(deviceId)) return { number, status: "failed", reason: "device_offline" };
-
-          try {
-            return {
-              ...(await sendToNumber(client, deviceId, number, message, files)),
-              deviceId,
-            };
-          } catch {
-            return { number, deviceId, status: "failed" };
-          }
-        })
+      // 🔥 Round-robin assignment — each number gets a different device
+      const settled = await Promise.allSettled(
+        batch.map((number, idx) => {
+          const deviceId = active[idx % active.length];
+          return sendToNumber(deviceId, number, message, files)
+            .then((r) => ({ ...r, deviceId }))
+            .catch(() => ({ number, deviceId, status: "failed", reason: "exception" }));
+        }),
       );
 
-      batchResults.forEach((r) =>
-        results.push(r.status === "fulfilled" ? r.value : { status: "failed" })
+      settled.forEach((r) =>
+        job.results.push(r.status === "fulfilled" ? r.value : { status: "failed" }),
       );
 
-      job.progress = results.length;
+      job.progress = job.results.length;
 
-      const sent   = results.filter((r) => r.status === "sent").length;
-      const nonwa  = results.filter((r) => r.status === "nonwa").length;
-      const failed = results.filter((r) => r.status === "failed").length;
+      const s = tally(job.results);
+      log(`📊 ${job.progress}/${numbers.length} ✅${s.sent} 🚫${s.nonwa} ❌${s.failed} RAM:${memMB()}MB`);
 
-      log(`📊 ${results.length}/${numbers.length} ✅${sent} 🚫${nonwa} ❌${failed} RAM:${getMemoryUsageMB()}MB`);
-
-      if (i + BATCH_SIZE < numbers.length) {
-        await sleep(jitter(BATCH_DELAY_MS, 500));
+      if (i + BATCH < numbers.length) {
+        await sleep(jitter(CFG.BATCH_DELAY_MS, 400));
       }
     }
 
     job.status      = "completed";
-    job.results     = results;
     job.completedAt = new Date().toISOString();
 
-    const sent = results.filter((r) => r.status === "sent").length;
-    log(`✅ Job ${job.id} done. Sent: ${sent}/${numbers.length}`);
+    const s = tally(job.results);
+    log(`✅ Job ${job.id} done. Sent: ${s.sent}/${numbers.length}`);
 
     // Notify Django
-    if (job.userId) {
-      try {
-        const filesData = (job.files || []).map((f) => ({
-          name: f.originalname, type: f.mimetype,
-        }));
-        await fetch("https://cloudwhatsapp-1.onrender.com/api/send-whatsapp/", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            results:     results.map((r) => ({ ...r, files: filesData })),
-            message:     job.message,
-            total:       job.numbers.length,
-            user_id:     job.userId,
-            campaign_id: job.campaignId,
-            status:      "completed",
-          }),
-        });
-        log(`📤 Django notified: campaign ${job.campaignId}`);
-      } catch (e) {
-        log(`⚠️ Django notify error: ${e.message}`);
-      }
-    }
+    if (job.userId) notifyDjango(job).catch((e) => log(`⚠️  Django notify: ${e.message}`));
 
-    pendingQueue.shift();
+    jobQueue.shift();
 
-    if (pendingQueue.length > 0) {
-      log(`⏳ Next job in ${NEXT_JOB_DELAY_MS / 1000}s...`);
-      await sleep(NEXT_JOB_DELAY_MS);
+    if (jobQueue.length) {
+      log(`⏳ Next job in ${CFG.NEXT_JOB_DELAY_MS / 1000}s...`);
+      await sleep(CFG.NEXT_JOB_DELAY_MS);
     }
   }
 
   fileCache.clear();
-  queueRunning = false;
-  log("✅ All queue jobs done.");
+  queueBusy = false;
+  log("✅ Queue empty.");
 }
 
-// ── API ROUTES ────────────────────────────────
+function tally(results) {
+  return {
+    sent:   results.filter((r) => r.status === "sent").length,
+    nonwa:  results.filter((r) => r.status === "nonwa").length,
+    failed: results.filter((r) => r.status === "failed").length,
+  };
+}
 
-app.get("/health", (req, res) => {
-  const deviceList = Object.keys(clients).map((id) => ({
-    deviceId: id,
-    ready:    readyMap[id] || false,
-    alive:    isClientAlive(id),
-    locked:   deviceLocks[id] || false,
-    number:   infoMap[id]?.wid?.user || "",
-  }));
+async function notifyDjango(job) {
+  const filesData = (job.files || []).map((f) => ({ name: f.originalname, type: f.mimetype }));
+  const res = await fetch("https://cloudwhatsapp-1.onrender.com/api/send-whatsapp/", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      results:     job.results.map((r) => ({ ...r, files: filesData })),
+      message:     job.message,
+      total:       job.numbers.length,
+      user_id:     job.userId,
+      campaign_id: job.campaignId,
+      status:      "completed",
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  log(`📤 Django notified: campaign ${job.campaignId}`);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// CLEANUP — uploads GC every hour
+// ─────────────────────────────────────────────────────────────────
+setInterval(() => {
+  const now = Date.now();
+  try {
+    for (const file of fs.readdirSync("./uploads")) {
+      const fp = path.join("./uploads", file);
+      try {
+        if (now - fs.statSync(fp).mtimeMs > CFG.UPLOAD_TTL_MS) fs.unlinkSync(fp);
+      } catch {}
+    }
+  } catch {}
+}, 3_600_000);
+
+// ─────────────────────────────────────────────────────────────────
+// HEARTBEAT — auto-heal stale devices every 5 min
+// ─────────────────────────────────────────────────────────────────
+setInterval(() => {
+  for (const [id] of clients) {
+    if (readyMap.get(id) && !isAlive(id)) {
+      log(`💔 Heartbeat: ${id} is stale — reconnecting`);
+      const c = clients.get(id);
+      clients.delete(id);
+      infoMap.delete(id);
+      destroyQuietly(c).then(() => scheduleReconnect(id));
+    }
+  }
+}, 5 * 60_000);
+
+// ─────────────────────────────────────────────────────────────────
+// API ROUTES
+// ─────────────────────────────────────────────────────────────────
+
+// GET /health
+app.get("/health", (_req, res) => {
+  const deviceList = [];
+  for (const [id] of clients) {
+    deviceList.push({
+      deviceId:    id,
+      ready:       readyMap.get(id) || false,
+      alive:       isAlive(id),
+      number:      infoMap.get(id)?.wid?.user || "",
+      score:       +scoreOf(id).toFixed(2),
+    });
+  }
   res.json({
-    status:          "ok",
-    node:            NODE_ID,
-    uptime:          Math.round(process.uptime()),
-    memory_mb:       getMemoryUsageMB(),
-    total_devices:   Object.keys(clients).length,
-    ready_devices:   getReadyDeviceIds().length,
-    max_devices:     MAX_DEVICES,
-    queue_jobs:      pendingQueue.length,
-    queue_running:   queueRunning,
-    os_free_mem_mb:  Math.round(os.freemem() / 1024 / 1024),
-    devices:         deviceList,
-    speed_config: {
-      sends_per_device:   SENDS_PER_DEVICE,
-      batch_delay_ms:     BATCH_DELAY_MS,
-      wa_check_timeout:   WA_CHECK_TIMEOUT,
-      send_timeout_ms:    SEND_TIMEOUT_MS,
-      protocol_timeout:   PROTOCOL_TIMEOUT,
-      rate_limit_per_min: RATE_LIMIT,
+    status:         "ok",
+    node:           CFG.NODE_ID,
+    uptime_s:       Math.round(process.uptime()),
+    memory_mb:      memMB(),
+    os_free_mb:     Math.round(os.freemem() / 1_048_576),
+    total_devices:  clients.size,
+    ready_devices:  readyDevices().length,
+    max_devices:    CFG.MAX_DEVICES,
+    queue_jobs:     jobQueue.length,
+    queue_running:  queueBusy,
+    devices:        deviceList,
+    cfg: {
+      sends_per_device:  CFG.SENDS_PER_DEVICE,
+      batch_delay_ms:    CFG.BATCH_DELAY_MS,
+      wa_check_ms:       CFG.WA_CHECK_MS,
+      send_timeout_ms:   CFG.SEND_TIMEOUT_MS,
+      rate_limit_pm:     CFG.RATE_LIMIT,
     },
   });
 });
 
+// GET /create-device?deviceId=xxx
 app.get("/create-device", async (req, res) => {
   const { deviceId } = req.query;
   if (!deviceId) return res.json({ status: "failed", message: "deviceId required" });
-  if (clients[deviceId]) return res.json({ status: "already_exists", ready: readyMap[deviceId] || false });
-  if (Object.keys(clients).length >= MAX_DEVICES)
-    return res.json({ status: "failed", message: `Max ${MAX_DEVICES} devices on this node` });
-  createDevice(deviceId);
-  res.json({ status: "creating", deviceId, node: NODE_ID });
+  if (clients.has(deviceId)) return res.json({ status: "already_exists", ready: readyMap.get(deviceId) || false });
+  if (clients.size >= CFG.MAX_DEVICES)
+    return res.json({ status: "failed", message: `Max ${CFG.MAX_DEVICES} devices on this node` });
+
+  createDevice(deviceId); // non-blocking
+  res.json({ status: "creating", deviceId, node: CFG.NODE_ID });
 });
 
+// GET /get-qr?deviceId=xxx
 app.get("/get-qr", (req, res) => {
   const { deviceId } = req.query;
   if (!deviceId) return res.json({ status: "failed" });
   res.json({
-    qr:     qrCodes[deviceId] || "",
-    ready:  readyMap[deviceId] || false,
-    exists: !!clients[deviceId],
+    qr:     qrStore.get(deviceId) || "",
+    ready:  readyMap.get(deviceId) || false,
+    exists: clients.has(deviceId),
   });
 });
 
+// GET /get-device?deviceId=xxx
 app.get("/get-device", (req, res) => {
   const { deviceId } = req.query;
-  const info = infoMap[deviceId];
+  const info = infoMap.get(deviceId);
   if (!info) return res.json({ status: "not_ready", ready: false });
   res.json({
     number:      info.wid?.user || "",
     name:        info.pushname || "",
-    ready:       readyMap[deviceId] || false,
-    alive:       isClientAlive(deviceId),
+    ready:       readyMap.get(deviceId) || false,
+    alive:       isAlive(deviceId),
     connectedAt: info.connectedAt,
     node:        info.node,
+    score:       +scoreOf(deviceId).toFixed(2),
   });
 });
 
-app.get("/list-devices", (req, res) => {
-  const deviceList = Object.keys(clients).map((id) => ({
-    deviceId:    id,
-    ready:       readyMap[id] || false,
-    alive:       isClientAlive(id),
-    number:      infoMap[id]?.wid?.user || "",
-    name:        infoMap[id]?.pushname || "",
-    connectedAt: infoMap[id]?.connectedAt || null,
-    node:        NODE_ID,
-  }));
-  res.json({
-    devices: deviceList,
-    total:   deviceList.length,
-    ready:   deviceList.filter((d) => d.ready && d.alive).length,
-    node:    NODE_ID,
-  });
+// GET /list-devices
+app.get("/list-devices", (_req, res) => {
+  const list = [];
+  for (const [id] of clients) {
+    const info = infoMap.get(id);
+    list.push({
+      deviceId:    id,
+      ready:       readyMap.get(id) || false,
+      alive:       isAlive(id),
+      number:      info?.wid?.user || "",
+      name:        info?.pushname || "",
+      connectedAt: info?.connectedAt || null,
+      node:        CFG.NODE_ID,
+      score:       +scoreOf(id).toFixed(2),
+    });
+  }
+  res.json({ devices: list, total: list.length, ready: list.filter((d) => d.ready && d.alive).length, node: CFG.NODE_ID });
 });
 
+// GET /delete-device?deviceId=xxx
 app.get("/delete-device", async (req, res) => {
   const { deviceId } = req.query;
-  const client = clients[deviceId];
+  const client = clients.get(deviceId);
   if (!client) return res.json({ status: "not_found" });
-  try { await client.destroy(); } catch {}
-  delete clients[deviceId]; delete readyMap[deviceId];
-  delete infoMap[deviceId]; delete qrCodes[deviceId];
-  delete retryCountMap[deviceId]; delete sendStats[deviceId];
-  delete deviceLocks[deviceId];
-  const sp = `./sessions/.wwebjs_auth/session-${deviceId}`;
-  if (fs.existsSync(sp)) fs.rmSync(sp, { recursive: true, force: true });
+  await destroyQuietly(client);
+  purgeDevice(deviceId, true);
   res.json({ status: "deleted" });
 });
 
+// GET /logout?deviceId=xxx
 app.get("/logout", async (req, res) => {
   const { deviceId } = req.query;
-  const client = clients[deviceId];
+  const client = clients.get(deviceId);
   if (!client) return res.json({ status: "not_found" });
   try { await client.logout(); } catch {}
-  try { await client.destroy(); } catch {}
-  delete clients[deviceId]; delete readyMap[deviceId];
-  delete infoMap[deviceId]; delete qrCodes[deviceId];
-  delete retryCountMap[deviceId]; delete sendStats[deviceId];
-  delete deviceLocks[deviceId];
-  const sp = `./sessions/.wwebjs_auth/session-${deviceId}`;
-  if (fs.existsSync(sp)) fs.rmSync(sp, { recursive: true, force: true });
+  await destroyQuietly(client);
+  purgeDevice(deviceId, true);
   res.json({ status: "logged_out" });
 });
 
-app.get("/queue-status", (req, res) => {
+// GET /queue-status
+app.get("/queue-status", (_req, res) => {
   res.json({
-    total:   pendingQueue.length,
-    running: queueRunning,
-    node:    NODE_ID,
-    jobs:    pendingQueue.map((j) => ({
-      id:         j.id,
-      campaignId: j.campaignId,
-      status:     j.status,
-      total:      j.numbers.length,
-      progress:   j.progress || 0,
-      percent:    j.numbers.length ? Math.round(((j.progress || 0) / j.numbers.length) * 100) : 0,
-      sent:       (j.results || []).filter((r) => r.status === "sent").length,
-      nonwa:      (j.results || []).filter((r) => r.status === "nonwa").length,
-      failed:     (j.results || []).filter((r) => r.status === "failed").length,
-      createdAt:  j.createdAt,
-      startedAt:  j.startedAt || null,
-    })),
+    total:   jobQueue.length,
+    running: queueBusy,
+    node:    CFG.NODE_ID,
+    jobs: jobQueue.map((j) => {
+      const s = tally(j.results || []);
+      return {
+        id:         j.id,
+        campaignId: j.campaignId,
+        status:     j.status,
+        total:      j.numbers.length,
+        progress:   j.progress || 0,
+        percent:    j.numbers.length ? Math.round(((j.progress || 0) / j.numbers.length) * 100) : 0,
+        sent:       s.sent,
+        nonwa:      s.nonwa,
+        failed:     s.failed,
+        createdAt:  j.createdAt,
+        startedAt:  j.startedAt || null,
+      };
+    }),
   });
 });
 
+// GET /cancel-job?jobId=xxx
 app.get("/cancel-job", (req, res) => {
   const { jobId } = req.query;
-  const job = pendingQueue.find((j) => String(j.id) === String(jobId));
+  const job = jobQueue.find((j) => String(j.id) === String(jobId));
   if (!job) return res.json({ status: "not_found" });
   job.status = "cancelled";
   res.json({ status: "cancelled", jobId });
 });
 
-// ── SEND BULK ─────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// POST /send-bulk
+// ─────────────────────────────────────────────────────────────────
 app.post("/send-bulk", upload.any(), async (req, res) => {
   let numbers      = req.body.numbers || [];
   const message    = req.body.message || "";
-  const userId     = req.body.userId || null;
-  const files      = req.files || [];
-  const userRole   = (req.body.userRole || "user").toLowerCase();
+  const userId     = req.body.userId  || null;
+  const files      = req.files        || [];
   const campaignId = req.body.campaignId || null;
 
   if (!Array.isArray(numbers)) numbers = [numbers];
@@ -711,103 +854,105 @@ app.post("/send-bulk", upload.any(), async (req, res) => {
   if (!message && !files.length)
     return res.json({ status: "failed", message: "Provide message or files" });
   if (numbers.length > 10 && !isWorkingHours())
-    return res.json({ status: "blocked", message: "Bulk campaigns only allowed 9AM–6PM IST" });
+    return res.json({ status: "blocked", message: `Bulk campaigns only allowed ${CFG.WORK_START_H}AM–${CFG.WORK_END_H}PM IST` });
 
-  const deviceIds = getReadyDeviceIds();
-  if (!deviceIds.length)
+  const active = readyDevices();
+  if (!active.length)
     return res.json({ status: "no_device", message: "No WhatsApp device connected" });
 
+  // ── Large batch → queue ──
   if (numbers.length > 10) {
     const job = {
       id: Date.now(), campaignId, numbers, message, files,
-      userId, userRole, status: "pending", progress: 0,
+      userId, status: "pending", progress: 0,
       results: [], createdAt: new Date().toISOString(),
     };
-    pendingQueue.push(job);
-    processQueue();
+    jobQueue.push(job);
+    processQueue(); // fire-and-forget
     return res.json({
       status:  "queued",
       jobId:   job.id,
       total:   numbers.length,
-      message: `Queued. ${numbers.length} numbers.`,
+      message: `Queued ${numbers.length} numbers.`,
       results: numbers.map((n) => ({ number: n, status: "pending" })),
     });
   }
 
-  // ≤10 numbers — sequential per device (not parallel) to avoid crashes
-  await prewarmFileCache(files);
+  // ── Small batch (≤10) — direct sequential send ──
+  await prewarm(files);
   const finalResults = [];
+
   for (let idx = 0; idx < numbers.length; idx++) {
     const number   = numbers[idx];
-    const deviceId = deviceIds[idx % deviceIds.length];
-    const client   = clients[deviceId];
-    if (!client || !isClientAlive(deviceId)) {
-      finalResults.push({ number, status: "failed", reason: "device_offline" });
-      continue;
-    }
-    try {
-      const r = await sendToNumber(client, deviceId, number, message, files);
-      finalResults.push({ ...r, deviceId });
-    } catch {
-      finalResults.push({ number, deviceId, status: "failed" });
-    }
+    const deviceId = active[idx % active.length];
+    const r = await sendToNumber(deviceId, number, message, files)
+      .catch(() => ({ number, deviceId, status: "failed", reason: "exception" }));
+    finalResults.push({ ...r, deviceId });
   }
 
-  res.json({
-    status:  "done",
-    total:   numbers.length,
-    sent:    finalResults.filter((r) => r.status === "sent").length,
-    failed:  finalResults.filter((r) => r.status === "failed").length,
-    nonwa:   finalResults.filter((r) => r.status === "nonwa").length,
-    results: finalResults,
-  });
+  const s = tally(finalResults);
+  res.json({ status: "done", total: numbers.length, ...s, results: finalResults });
 });
 
-// ── SEND SINGLE ───────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// POST /send-single
+// ─────────────────────────────────────────────────────────────────
 app.post("/send-single", upload.any(), async (req, res) => {
   const { number, message } = req.body;
-  const files = req.files || [];
+  const files  = req.files || [];
+
   if (!number) return res.json({ status: "failed", message: "number required" });
   if (!message && !files.length) return res.json({ status: "failed", message: "message or file required" });
-  const deviceIds = getReadyDeviceIds();
-  if (!deviceIds.length) return res.json({ status: "no_device" });
-  const deviceId = deviceIds[0];
-  await prewarmFileCache(files);
-  const result = await sendToNumber(clients[deviceId], deviceId, number, message, files);
-  res.json({ ...result, deviceId });
+
+  const active = readyDevices();
+  if (!active.length) return res.json({ status: "no_device" });
+
+  await prewarm(files);
+  const result = await sendToNumber(active[0], number, message, files)
+    .catch(() => ({ number, status: "failed", reason: "exception" }));
+
+  res.json({ ...result, deviceId: active[0] });
 });
 
-// ── AUTO-RESTORE SESSIONS ─────────────────────
+// ─────────────────────────────────────────────────────────────────
+// SESSION RESTORE — stagger 3s apart to avoid CPU spike
+// ─────────────────────────────────────────────────────────────────
 async function restoreSessions() {
   const dir = "./sessions/.wwebjs_auth";
   if (!fs.existsSync(dir)) return;
+
   const folders = fs.readdirSync(dir).filter((f) => f.startsWith("session-"));
-  log(`🔄 Restoring ${folders.length} sessions on ${NODE_ID}...`);
+  log(`🔄 Restoring ${folders.length} sessions on ${CFG.NODE_ID}...`);
+
   for (const folder of folders) {
     const deviceId = folder.replace("session-", "");
-    createDevice(deviceId);
-    await sleep(3000); // stagger to avoid overload
+    createDevice(deviceId); // non-blocking
+    await sleep(2500); // 🔥 slightly tighter than before (was 3000)
   }
 }
 
-// ── GRACEFUL SHUTDOWN ─────────────────────────
-async function gracefulShutdown(signal) {
-  log(`🛑 ${signal} — shutting down ${NODE_ID}...`);
-  for (const deviceId of Object.keys(clients)) {
-    try { await clients[deviceId].destroy(); } catch {}
-  }
+// ─────────────────────────────────────────────────────────────────
+// GRACEFUL SHUTDOWN
+// ─────────────────────────────────────────────────────────────────
+async function shutdown(signal) {
+  log(`🛑 ${signal} — shutting down ${CFG.NODE_ID}...`);
+  await Promise.allSettled(
+    [...clients.values()].map((c) => destroyQuietly(c)),
+  );
   process.exit(0);
 }
 
-process.on("SIGINT",  () => gracefulShutdown("SIGINT"));
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-process.on("uncaughtException",  (err)    => log(`💥 Uncaught: ${err.message}`));
-process.on("unhandledRejection", (reason) => log(`💥 Unhandled: ${reason}`));
+process.on("SIGINT",             () => shutdown("SIGINT"));
+process.on("SIGTERM",            () => shutdown("SIGTERM"));
+process.on("uncaughtException",  (e) => log(`💥 Uncaught: ${e.message}\n${e.stack}`));
+process.on("unhandledRejection", (r) => log(`💥 Unhandled: ${r}`));
 
-// ── START ─────────────────────────────────────
-app.listen(PORT, "0.0.0.0", async () => {
-  log(`🚀 ${NODE_ID} running on :${PORT}`);
-  log(`📋 Health: http://localhost:${PORT}/health`);
-  log(`⚙️  protocolTimeout=${PROTOCOL_TIMEOUT}ms | sendTimeout=${SEND_TIMEOUT_MS}ms | sends/device=${SENDS_PER_DEVICE}`);
+// ─────────────────────────────────────────────────────────────────
+// START
+// ─────────────────────────────────────────────────────────────────
+app.listen(CFG.PORT, "0.0.0.0", async () => {
+  log(`🚀 ${CFG.NODE_ID} → :${CFG.PORT}`);
+  log(`📋 Health: http://localhost:${CFG.PORT}/health`);
+  log(`⚙️  timeout=${CFG.SEND_TIMEOUT_MS}ms | proto=${CFG.PROTOCOL_TIMEOUT}ms | sends/dev=${CFG.SENDS_PER_DEVICE} | rate=${CFG.RATE_LIMIT}/min`);
   await restoreSessions();
 });
